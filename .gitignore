@@ -1,0 +1,24 @@
+# ── 依赖与构建产物 ──────────────────────────────
+node_modules/
+dist/
+client/dist/
+server/dist/
+*.tsbuildinfo
+client/tsconfig.tsbuildinfo
+
+# ── 本地环境与日志 ──────────────────────────────
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+
+# ── 大体积多媒体与离线发布包（不入库，见 README「资源说明」）──
+client/public/bgm.flac
+release/
+
+# ── AI 审计与调试产物 ───────────────────────────
+ai-review/
+selfplay-build/
+poolcheck-build/
+scratch/

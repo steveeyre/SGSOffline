@@ -1,0 +1,10 @@
+# 统一换行，避免 Windows/Linux 差异
+* text=auto eol=lf
+
+# 二进制资源不做换行转换
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.webp binary
+*.flac binary
+*.bat binary

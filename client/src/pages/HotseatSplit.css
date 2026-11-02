@@ -1,0 +1,104 @@
+/*
+ * 左右手对弈双屏：
+ * 窗口偏宽（如 3440×1440）时左右分屏，窗口偏窄偏高的竖屏拼接（如 2880×3600）时上下分屏，
+ * 每个分屏按自身尺寸排版，不再整体缩小后留黑边。
+ */
+.hotseat-split {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: row;
+    background: #000;
+}
+
+.hotseat-pane {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    /* 分屏内自成一套定位基准：对局的浮层、提示都落在自己这一屏里 */
+    contain: layout;
+}
+
+.hotseat-pane > .game-page,
+.hotseat-split .pick-page {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    height: auto;
+}
+
+.hotseat-pane + .hotseat-pane {
+    border-left: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.hotseat-pane-label {
+    position: absolute;
+    top: 6px;
+    left: 8px;
+    z-index: 60;
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: var(--font-ui);
+    color: #fff;
+    pointer-events: none;
+}
+
+.hotseat-pane-label.warm { background: rgba(200, 60, 60, 0.85); }
+.hotseat-pane-label.cool { background: rgba(60, 110, 200, 0.85); }
+
+.hotseat-pane-side::before { content: '（左）'; }
+.hotseat-pane-label.cool .hotseat-pane-side::before { content: '（右）'; }
+
+@media (max-aspect-ratio: 1/1) {
+    .hotseat-split {
+        flex-direction: column;
+    }
+
+    .hotseat-pane + .hotseat-pane {
+        border-left: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.25);
+    }
+
+    .hotseat-pane-label.warm .hotseat-pane-side::before { content: '（上）'; }
+    .hotseat-pane-label.cool .hotseat-pane-side::before { content: '（下）'; }
+}
+
+/* 选将/部署的双屏：分屏内是一整套面板，不再按整窗尺寸排版 */
+.hotseat-pane .pick-header {
+    padding-left: 84px;
+}
+
+.hotseat-pane .pick-title {
+    font-size: 18px;
+}
+
+.hotseat-pane .deploy-main {
+    gap: 10px;
+    padding: 10px;
+}
+
+.hotseat-pane .deploy-slots {
+    gap: 8px;
+}
+
+.hotseat-pane .deploy-slot {
+    padding: 8px;
+    min-height: 70px;
+}
+
+.hotseat-pane .deploy-pool {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+}
+
+.hotseat-pane .deploy-confirm-btn {
+    padding: 10px 32px;
+    font-size: 14px;
+}
+
+.hotseat-pane .deploy-opponent {
+    padding: 6px 10px;
+}

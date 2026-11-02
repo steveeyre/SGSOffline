@@ -1,0 +1,33 @@
+{
+    "name": "client",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc -b && vite build",
+        "build:standalone": "node scripts/build-standalone.mjs",
+        "check": "node scripts/run-engine-checks.mjs && node scripts/run-engine-checks.mjs src/modes/FightTheLandlord/_checks-ddz.ts && node scripts/run-engine-checks.mjs src/modes/HappyPair/_checks-pair.ts",
+        "check:selfplay": "node scripts/run-engine-checks.mjs src/engine/_selfplay.ts 20",
+        "check:selfplay-pair": "node scripts/run-engine-checks.mjs src/modes/HappyPair/selfplay-pair.ts 20",
+        "check:audit": "node scripts/run-engine-checks.mjs src/engine/_audit-checks.ts",
+        "audit": "node scripts/audit/pipeline.mjs",
+        "lint": "eslint .",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "react-router-dom": "^7.18.5",
+        "sgs3v3-shared": "*",
+        "socket.io-client": "^4.8.1",
+        "zustand": "^5.0.2"
+    },
+    "devDependencies": {
+        "@types/react": "^18.3.12",
+        "@types/react-dom": "^18.3.1",
+        "@vitejs/plugin-react": "^4.3.4",
+        "typescript": "^5.7.2",
+        "vite": "^6.0.5"
+    }
+}

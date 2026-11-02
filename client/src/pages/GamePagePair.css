@@ -1,0 +1,15 @@
+/* 欢乐成双：1、4 号位固定在上排，2、3 号位固定在下排（逆时针）。
+   人类执冷色时，把己方行整体移到上方，保证 1 号位始终在左上角。 */
+.game-main.pair-mine-top .generals-row.my-row {
+    order: -1;
+    align-items: flex-start;
+    border-top: none;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.game-main.pair-mine-top .generals-row.opp-row {
+    order: 1;
+    align-items: flex-end;
+    border-bottom: none;
+    border-top: 1px solid var(--color-border);
+}

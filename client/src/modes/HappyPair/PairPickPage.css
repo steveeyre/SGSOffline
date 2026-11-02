@@ -1,0 +1,15 @@
+.landlord-pick-columns.pair-pick-columns {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pair-pick-column.cool {
+    border-color: rgba(96, 170, 255, 0.55);
+}
+
+.pair-pick-column.warm {
+    border-color: rgba(255, 150, 90, 0.55);
+}
+
+.pair-pick-column.mine {
+    box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.35);
+}
