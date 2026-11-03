@@ -36,7 +36,7 @@ import { dodgeHoldValue, delayedSuccessChance, negateRisk, predictAoe, predictDu
 import { enemyPlans, guessHand, handDodgeChance, incomingDamage, knownSuits } from './ai-memory'
 import { beginDecision, endDecision } from './ai-audit'
 import { applyChoicePatches, applyPatchToOptions, forcedPlayRule, hasHookRules, pickBestChoice, thresholdFor, type Choice } from './ai-variant'
-import { pickQingnangPlan, stealableEquipSlots } from './general-playbook'
+import { pickQingnangPlan, pickYijiReceiver, rendeOpportunity, stealableEquipSlots } from './general-playbook'
 
 const SLASH_NAMES: string[] = [BasicCardName.ATTACK, BasicCardName.FIRE_SLASH, BasicCardName.THUNDER_SLASH]
 
@@ -2258,10 +2258,11 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             break
         case ResponseType.SKILL_YIJI_DISTRIBUTE: {
             const cards: string[] = ctx.yijiCardIds ?? []
-            const ally = state.generals.findIndex((g) => g.alive && g.playerId === playerId && g !== state.generals[targetIndex])
-            if (cards.length > 0 && ally >= 0) {
-                payload.targetIndex = ally
-                payload.cardIds = cards.slice(0, 1)
+            const myFaction = state.players[playerId]?.faction
+            const receiver = pickYijiReceiver(state.generals, targetIndex, myFaction)
+            if (cards.length > 0 && receiver >= 0) {
+                payload.targetIndex = receiver
+                payload.cardIds = cards
             }
             break
         }
@@ -2969,15 +2970,14 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     }
     // 仁德：攒够 2 张换回血/牌差，优先给能吃下这类牌的队友
     if (knowsSkill(active, 'liubei_rende') && hand.length >= 2) {
-        const wantHeal = active.hp < active.maxHp && !active.rendeHealedThisTurn
-        const wantRelief = hand.length > active.hp + 2
-        if (wantHeal || wantRelief) {
+        const rende = rendeOpportunity(active, alliesButSelf.map(({ g }) => g), active.rendeHealedThisTurn)
+        if (rende.trigger) {
             const giftIds = [...hand].filter((c) => !isPeach(c))
                 .sort((a, b) => keepValue(a) - keepValue(b)).slice(0, 2)
             // 按两张牌里更值钱的那张挑接收者
             const receiver = giftIds.length === 2 ? giftReceiver(giftIds[1]) : undefined
             if (receiver) {
-                offer('skill:rende', (wantHeal ? 66 : 50) + cardFit(receiver.g, giftIds[1]) * 4, ['value'],
+                offer('skill:rende', (rende.wantHeal ? 66 : 50) + cardFit(receiver.g, giftIds[1]) * 4, ['value'],
                     () => useSkill('liubei_rende', [receiver.index], giftIds.map((c) => c.id)))
             }
         }

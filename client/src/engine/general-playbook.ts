@@ -7,7 +7,7 @@
  *
  * 已登记：奇才（拆牌目标过滤）、杀伤害加成来源、青囊（主动治疗）。
  */
-import { EquipSlot, EquipmentCardName, GameState, SeatRole } from 'sgs3v3-shared'
+import { EquipSlot, EquipmentCardName, Faction, GameState, SeatRole } from 'sgs3v3-shared'
 import { hasSkillOf } from './ai-synergy'
 
 export type GeneralView = GameState['generals'][number]
@@ -139,4 +139,45 @@ export function pickQingnangPlan(
     const card = [...general.hand].sort((a, b) => a.value - b.value)[0]
     if (!card) return null
     return { targetIndex: best.index, cardId: card.id }
+}
+
+export interface RendeOpportunity {
+    trigger: boolean
+    wantHeal: boolean
+}
+
+/**
+ * 仁德（刘备）：给两张牌换回血或牌差。
+ * 受伤时优先回血；手牌明显溢出或队友手牌见底时也值得给牌。
+ */
+export function rendeOpportunity(
+    active: GeneralView,
+    allies: GeneralView[],
+    healedThisTurn: boolean,
+): RendeOpportunity {
+    const wantHeal = active.hp < active.maxHp && !healedThisTurn
+    const wantRelief = active.hand.length > active.hp + 1
+    const allyShort = allies.some((g) => g.alive && g.hand.length <= 1)
+    return { trigger: wantHeal || wantRelief || allyShort, wantHeal }
+}
+
+/**
+ * 遗计（郭嘉）：摸到的两张牌交给需求最高的人。
+ * 主帅优先，其次缺牌与已受伤；自己只有在确实最缺牌时才留牌。
+ */
+export function pickYijiReceiver(
+    generals: GameState['generals'],
+    selfIndex: number,
+    faction: Faction | undefined,
+): number {
+    const receivers = generals
+        .map((g, index) => ({ g, index }))
+        .filter(({ g }) => g.alive && g.faction === faction)
+    const need = ({ g, index }: { g: GeneralView; index: number }): number =>
+        (g.seatRole === SeatRole.COMMANDER ? 30 : 0) +
+        Math.max(0, 3 - g.hand.length) * 6 +
+        (g.maxHp - g.hp) * 8 +
+        (index === selfIndex ? -6 : 0)
+    const best = [...receivers].sort((a, b) => need(b) - need(a))[0]
+    return best ? best.index : -1
 }
