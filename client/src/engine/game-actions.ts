@@ -766,6 +766,24 @@ function processAutoExecutePendingImpl(state: GameState): void {
                 resumeSheyanExtra(state, ctx)
                 break
             }
+            case 'fuhuanghou_xuanqiu_extra': {
+                resumeXuanqiuExtra(state, ctx)
+                break
+            }
+            case 'zhanghe_qiaobian_resume': {
+                const zbActive = getActiveGeneral(state)
+                if (!zbActive) break
+                if (state.pendingResponseQueue.length > 0) {
+                    state.pendingResponseQueue.push({
+                        type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                        targetGeneralIndex: indexOfGeneral(state, zbActive),
+                        context: { skillId: 'zhanghe_qiaobian_resume', autoExecute: true },
+                    })
+                    break
+                }
+                enterDiscardPhaseOrSkip(state, zbActive)
+                break
+            }
             case 'zhangsong_xiantu_cost': {
                 resolveXiantuCost(state, general)
                 break
@@ -8628,7 +8646,18 @@ function handleRespondImpl(state: GameState, playerId: string, data: C2S_Respond
                     if (zbDeclinePhase === "judge") continueTurnFromJudge(state, false, false, zbDeclineSkip);
                     else if (zbDeclinePhase === "draw") finishJudgePhaseAndContinue(state, targetGeneral, zbDeclineSkip, false);
                     else if (zbDeclinePhase === "action") beginActionPhase(state, targetGeneral);
-                    else enterDiscardPhaseOrSkip(state, targetGeneral);
+                    else {
+                        // 前面技能（如屯田）的询问还没结算完时，先排队续接，否则回合停住
+                        if (state.pendingResponseQueue.length > 0) {
+                            state.pendingResponseQueue.push({
+                                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                                targetGeneralIndex: indexOfGeneral(state, targetGeneral),
+                                context: { skillId: 'zhanghe_qiaobian_resume', autoExecute: true },
+                            })
+                        } else {
+                            enterDiscardPhaseOrSkip(state, targetGeneral);
+                        }
+                    }
                     return;
                 }
                 if (ctx.skillId === "taishici_hanzhan") {
@@ -13324,6 +13353,16 @@ function handleRespondImpl(state: GameState, playerId: string, data: C2S_Respond
                         }
                     }
                 }
+                // 移装备可能触发屯田等失去牌询问；队列未清空时先排队续接，
+                // 否则 enterDiscardPhaseOrSkip 会直接返回，回合停在摸牌阶段无法推进。
+                if (state.pendingResponseQueue.length > 0) {
+                    state.pendingResponseQueue.push({
+                        type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                        targetGeneralIndex: indexOfGeneral(state, targetGeneral),
+                        context: { skillId: 'zhanghe_qiaobian_resume', autoExecute: true },
+                    })
+                    return
+                }
                 enterDiscardPhaseOrSkip(state, targetGeneral)
                 return
             }
@@ -15864,21 +15903,63 @@ function resumeXuanqiuUse(
     const cardIdx = user.hand.findIndex(c => c.id === ctx.xuanqiuCardId)
     if (cardIdx === -1) return
     const card = user.hand[cardIdx]
-    const targetIndices = [...((ctx.xuanqiuTargetIndices as number[]) ?? [])]
+    const baseIndices = [...((ctx.xuanqiuTargetIndices as number[]) ?? [])]
+    const targetIndices = [...baseIndices]
     let added = false
     if (extraTargetIndex !== undefined && !targetIndices.includes(extraTargetIndex)) {
         targetIndices.push(extraTargetIndex)
         added = true
     }
     const targets = targetIndices.map(i => state.generals[i]).filter(g => g?.alive)
+    const extraSlashTarget = added && (card.name === BasicCardName.ATTACK || isCardUsableAsAttack(user, card))
     // 【杀】默认只能指定一名目标，求援追加的目标靠天义同款的目标额度过校验
-    if (added && (card.name === BasicCardName.ATTACK || isCardUsableAsAttack(user, card))) {
+    if (extraSlashTarget) {
         user.extraSlashTargets = (user.extraSlashTargets ?? 0) + 1
+        const outcome = dispatchCardUse(state, user, card, cardIdx, targets)
+        user.extraSlashTargets = (user.extraSlashTargets ?? 0) - 1
+        if (outcome && 'error' in outcome) addLog(state, `【求援】${outcome.error}`)
+        return
+    }
+    // 决斗/火攻在引擎里是单目标锦囊：额外目标放到本次结算后单独结算一次，
+    // 与舍宴的追加目标同路；直接塞进同一次结算会被目标数校验拒绝，牌留在手里反复重试。
+    if (added && extraTargetIndex !== undefined
+        && (card.name === TrickCardName.DUEL || card.name === TrickCardName.FIRE_ATTACK)) {
+        const baseTargets = baseIndices.map(i => state.generals[i]).filter(g => g?.alive)
+        const outcome = dispatchCardUse(state, user, card, cardIdx, baseTargets)
+        if (outcome && 'error' in outcome) {
+            addLog(state, `【求援】${outcome.error}`)
+            return
+        }
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: extraTargetIndex,
+            context: {
+                autoExecute: true,
+                skillId: 'fuhuanghou_xuanqiu_extra',
+                xuanqiuCasterIndex: state.generals.indexOf(user),
+                xuanqiuExtraTarget: extraTargetIndex,
+                xuanqiuCardId: card.id,
+            },
+        })
+        return
     }
     const outcome = dispatchCardUse(state, user, card, cardIdx, targets)
-    if (added && (card.name === BasicCardName.ATTACK || isCardUsableAsAttack(user, card))) {
-        user.extraSlashTargets = (user.extraSlashTargets ?? 0) - 1
-    }
+    if (outcome && 'error' in outcome) addLog(state, `【求援】${outcome.error}`)
+}
+
+/** 求援的额外目标：在首目标结算完成后单独结算一次 */
+function resumeXuanqiuExtra(state: GameState, ctx: any): void {
+    const caster = state.generals[(ctx.xuanqiuCasterIndex as number)]
+    const target = state.generals[(ctx.xuanqiuExtraTarget as number)]
+    if (!caster?.alive || !target?.alive) return
+    const card = state.discard.find(c => c.id === ctx.xuanqiuCardId)
+        ?? caster.hand.find(c => c.id === ctx.xuanqiuCardId)
+    if (!card) return
+    const outcome = handleTrickCard(state, caster, card, -1, [target], {
+        __sheyanResume: true,
+        __sheyanSecond: true,
+        __sheyanAdded: true,
+    })
     if (outcome && 'error' in outcome) addLog(state, `【求援】${outcome.error}`)
 }
 

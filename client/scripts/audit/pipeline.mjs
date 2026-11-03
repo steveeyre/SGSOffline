@@ -95,6 +95,7 @@ async function commandRun(flags) {
         playStride: num(flags.stride, 8),
         maxDecisionsPerGame: num(flags['max-decisions'], 400),
         maxSteps: 60000,
+        poolVersion: typeof flags.pool === 'string' ? flags.pool : undefined,
     }
     console.log(`产出 ${games} 局（种子 ${startSeed}..${startSeed + games - 1}，${workers} 进程）→ ${runDir}`)
     const summary = await runEngineBatch({ runDir, spec, seeds, workers, stage: 'run' })
@@ -778,7 +779,7 @@ function commandStatus() {
 function help() {
     console.log(`用法：node scripts/audit/pipeline.mjs <命令> [参数]
 
-  run       --games 200 --workers 4 [--seed 1000] [--stride 8] [--run <id>]
+  run       --games 200 --workers 4 [--seed 1000] [--stride 8] [--pool classic2013|luoshu|custom] [--run <id>]
   screen    --run <id> [--ratio 0.07] [--max 20000] [--clusters 8]
   review    --run <id> [--clusters 6] [--evidence-games 200] [--workers 4] [--max-hits 12]
             [--llm-clusters 4] [--llm on|off] [--compact] [--model <name>] [--num-ctx 8192] [--max-tokens 800]

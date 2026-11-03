@@ -5,9 +5,9 @@
  * 新增武将时在此登记一条即可被拆牌、弃牌、选目标等逻辑共用。
  * 这里的每条结论都必须与 game-actions.ts 的实际结算一致，否则 AI 会做出引擎拒绝的操作。
  *
- * 已登记：奇才（拆牌目标过滤）、杀伤害加成来源、青囊（主动治疗）。
+ * 已登记：奇才（拆牌目标过滤）、杀伤害加成来源、青囊（主动治疗）、拆牌位选择。
  */
-import { EquipSlot, EquipmentCardName, Faction, GameState, SeatRole } from 'sgs3v3-shared'
+import { Card, EquipSlot, EquipmentCardName, Faction, GameState, SeatRole } from 'sgs3v3-shared'
 import { hasSkillOf } from './ai-synergy'
 
 export type GeneralView = GameState['generals'][number]
@@ -36,6 +36,25 @@ export function equipSlotIsStealable(g: GeneralView, slot: EquipSlot): boolean {
 export function stealableEquipSlots(g: GeneralView): EquipSlot[] {
     return [EquipSlot.WEAPON, EquipSlot.ARMOR, EquipSlot.PLUS_HORSE, EquipSlot.MINUS_HORSE]
         .filter((slot) => !!g.equip[slot] && equipSlotIsStealable(g, slot))
+}
+
+/**
+ * 拆/顺/寒冰剑该拿走哪个牌位：按牌的价值挑最高的那一张，而不是固定取第一个。
+ * 目标有八卦阵时先拆防具，比固定先拆武器更划算。
+ */
+export function bestStealSlot(g: GeneralView, valueOf: (card: Card) => number): EquipSlot | undefined {
+    let best: EquipSlot | undefined
+    let bestValue = -Infinity
+    for (const slot of stealableEquipSlots(g)) {
+        const card = g.equip[slot]
+        if (!card) continue
+        const value = valueOf(card)
+        if (value > bestValue) {
+            bestValue = value
+            best = slot
+        }
+    }
+    return best
 }
 
 /** 【杀】伤害加成的公开来源 */

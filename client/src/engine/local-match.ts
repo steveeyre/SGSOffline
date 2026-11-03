@@ -11,7 +11,7 @@ import {
 import { createDeck, getDeckPreference, shuffleDeck } from './cards'
 import { addLog, createGeneralInstance } from './game-state'
 import { triggerShuzhiChoose } from './game-actions'
-import { getGeneralById, getGeneralPool } from './generals'
+import { getGeneralById, getGeneralPool, type GeneralPoolVersion } from './generals'
 import { drawCards } from './deck'
 import { newRandomSeed, setRandomSeed, shuffleInPlace } from './rng'
 
@@ -24,7 +24,12 @@ export const HUMAN2_PLAYER_ID = 'human2'
  * 创建单机对局：同一种子可完整复现本局。
  * hotseat = true 时两边都是本地玩家（暖方 HUMAN_PLAYER_ID、冷方 HUMAN2_PLAYER_ID），不跑 AI。
  */
-export function createLocalMatch(humanFaction: Faction, seed: number = newRandomSeed(), hotseat = false): GameState {
+export function createLocalMatch(
+    humanFaction: Faction,
+    seed: number = newRandomSeed(),
+    hotseat = false,
+    poolVersion?: GeneralPoolVersion,
+): GameState {
     setRandomSeed(seed)
     const humanSide = hotseat ? Faction.WARM : humanFaction
     const aiFaction = humanSide === Faction.WARM ? Faction.COOL : Faction.WARM
@@ -39,7 +44,7 @@ export function createLocalMatch(humanFaction: Faction, seed: number = newRandom
         warmPlayerId: humanSide === Faction.WARM ? HUMAN_PLAYER_ID : AI_PLAYER_ID,
         coolPlayerId: humanSide === Faction.COOL ? HUMAN_PLAYER_ID : (hotseat ? HUMAN2_PLAYER_ID : AI_PLAYER_ID),
         pickState: {
-            pool: shuffleInPlace([...getGeneralPool()]).slice(0, 16),
+            pool: shuffleInPlace([...getGeneralPool(poolVersion)]).slice(0, 16),
             pickStep: 0,
             warmPicked: [],
             coolPicked: [],

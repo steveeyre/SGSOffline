@@ -91,8 +91,16 @@ function runProcess(bundle, specPath, label) {
         })
         child.on('error', rejectPromise)
         child.on('close', (code) => {
-            if (code === 0) resolvePromise()
-            else rejectPromise(new Error(`${label} 退出码 ${code}\n${tail}`))
+            if (code === 0) return resolvePromise()
+            // 单局卡死会让 _audit 以非 0 退出，但 summary.json 已落盘；
+            // 此时按批次完成处理，失败局计入 failures，而不是中止整批审计。
+            try {
+                const spec = JSON.parse(readFileSync(specPath, 'utf8'))
+                if (spec.outDir && existsSync(join(spec.outDir, 'summary.json'))) return resolvePromise()
+            } catch {
+                // 读不到 spec 时按真正的进程失败处理
+            }
+            rejectPromise(new Error(`${label} 退出码 ${code}\n${tail}`))
         })
     })
 }

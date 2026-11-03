@@ -8,6 +8,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Faction } from 'sgs3v3-shared'
 import { runSelfPlayGame, type SelfPlayResult } from './selfplay'
+import type { GeneralPoolVersion } from './generals'
 import {
     featureTable, finishAuditGame, forcedAppliedCount, interventionHitCount, startAudit, startAuditGame, stopAudit,
     type AuditIntervention,
@@ -25,6 +26,8 @@ export interface AuditSpec {
     games?: number
     startSeed?: number
     maxSteps?: number
+    /** 自对弈使用的武将池，默认跟浏览器一致（2013） */
+    poolVersion?: GeneralPoolVersion
     faction?: FactionMode
     patchBank?: PatchBank | null
     patchId?: string
@@ -134,7 +137,7 @@ function main(): void {
 
     const runOne = (seed: number, gameIndex: number): SelfPlayResult => {
         startAuditGame({ seed, game: gameIndex })
-        const result = runSelfPlayGame(seed, Faction.WARM, spec.maxSteps)
+        const result = runSelfPlayGame(seed, Faction.WARM, spec.maxSteps, spec.poolVersion)
         return result
     }
 

@@ -35,8 +35,8 @@ import { analyzeStrategy } from './ai-strategy'
 import { dodgeHoldValue, delayedSuccessChance, negateRisk, predictAoe, predictDuel, predictSlash, teamView } from './ai-forecast'
 import { enemyPlans, guessHand, handDodgeChance, incomingDamage, knownSuits } from './ai-memory'
 import { beginDecision, endDecision } from './ai-audit'
-import { applyChoicePatches, applyPatchToOptions, forcedPlayRule, hasHookRules, pickBestChoice, thresholdFor, type Choice } from './ai-variant'
-import { pickQingnangPlan, pickYijiReceiver, rendeOpportunity, stealableEquipSlots } from './general-playbook'
+import { applyChoicePatches, applyPatchToOptions, experimentOn, forcedPlayRule, hasHookRules, noteExperiment, pickBestChoice, thresholdFor, type Choice } from './ai-variant'
+import { bestStealSlot, pickQingnangPlan, pickYijiReceiver, rendeOpportunity, stealableEquipSlots } from './general-playbook'
 
 const SLASH_NAMES: string[] = [BasicCardName.ATTACK, BasicCardName.FIRE_SLASH, BasicCardName.THUNDER_SLASH]
 
@@ -1852,10 +1852,14 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 break
             }
             if (skillId === 'fuhuanghou_xuanqiu') {
-                // 求援：优先把敌方角色拖成额外目标
+                // 求援：优先把敌方角色拖成额外目标。
+                // 排除超出使用者攻击范围的人：选了也只会被判“距离太远”，结算会反复回到这一步。
+                const xqUserIdx = (ctx as any).xuanqiuUserIndex as number | undefined
+                const xqUser = xqUserIdx === undefined ? undefined : state.generals[xqUserIdx]
                 const victim = candidates
                     .map((i) => ({ i, g: state.generals[i] }))
-                    .filter(({ g }) => g?.alive && isEnemy(state, g, playerId))
+                    .filter(({ g }) => g?.alive && isEnemy(state, g, playerId)
+                        && (!xqUser || getAttackRange(xqUser, g, state.generals).inRange))
                     .sort((a, b) => a.g.hp - b.g.hp)[0]
                 if (victim) payload.targetIndex = victim.i
                 else payload.action = 'decline'
@@ -2398,13 +2402,15 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 // 敌方：判定区的乐/兵粮通常是己方放的，不应主动拆掉；无其他牌时才处理。
                 // 装备位只取技能取消不了的那些：奇才②（界黄月英）会取消对手拆其防具，
                 // 选它会被引擎判为无效，整张锦囊白费（自对弈 300 局命中 12 次）。
+                // 牌位按价值挑最高的：八卦阵比 1 点攻击范围的武器更值得拆。
                 const slots = stealableEquipSlots(victim)
+                const slot = stealSlotOf(state, playerId, victim)
                 const hasOtherCards = victim.hand.length > 0 || slots.length > 0
                 if (!hasOtherCards && delayed.length > 0) {
                     payload.action = 'judge'
                     payload.cardId = delayed[0].id
-                } else if (slots.length > 0) {
-                    payload.action = slots[0]
+                } else if (slot) {
+                    payload.action = slot
                 } else if (victim.hand.length > 0) {
                     // 只能拿手牌（敌方手牌本就是随机，交给服务端处理）
                     payload.action = 'hand'
@@ -2420,8 +2426,8 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             const victim = state.generals[ctx.iceTargetIndex]
             if (victim) {
                 // 先拆关键装备，再拆手牌；奇才②保护的防具不可选
-                const slots = stealableEquipSlots(victim)
-                if (slots.length > 0) payload.action = slots[0]
+                const slot = stealSlotOf(state, playerId, victim)
+                if (slot) payload.action = slot
                 else if (victim.hand.length > 0) payload.action = 'hand'
             }
             break
@@ -2648,6 +2654,24 @@ function applyRespondPatches(
             payload.cardId = cardId
         }
     }
+}
+
+/**
+ * 拆/顺/寒冰剑该拿走哪个牌位。
+ *
+ * 旧行为固定取「武器→防具→坐骑」里第一个存在的牌位；开实验后改按保留价值挑最高的一张。
+ * 两套实现都保持在这里，A/B 期间才能让同一个种子只在一方改变决策。
+ */
+function stealSlotOf(
+    state: GameState,
+    playerId: string,
+    victim: GeneralView,
+): EquipSlot | undefined {
+    const legacy = stealableEquipSlots(victim)[0]
+    if (!experimentOn(state.players[playerId]?.faction, 'steal_slot_by_value')) return legacy
+    const byValue = bestStealSlot(victim, keepValue)
+    if (byValue !== legacy) noteExperiment('steal_slot_by_value')
+    return byValue
 }
 
 function finishRespond(state: GameState, playerId: string, payload: Record<string, unknown>): boolean {

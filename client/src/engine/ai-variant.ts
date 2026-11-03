@@ -48,10 +48,18 @@ export interface Choice {
     score: number
 }
 
+/**
+ * 代码级改动的开关：补丁只能改分/否决候选，改不了「怎么选目标」这类分支，
+ * 而 A/B 必须让同一处改进只作用在一方，否则成对比较永远是 0。
+ * 未配置 = 走原有实现，保证不带开关跑出来的对局与改动前逐局一致。
+ */
+export type ExperimentName = 'steal_slot_by_value' | 'yinghun_pressure' | 'tuxi_priority'
+
 export interface PatchSet {
     id: string
     note?: string
     rules: PatchRule[]
+    experiments?: Partial<Record<ExperimentName, boolean>>
 }
 
 /** 按阵营分别加载：成对 A/B 里同一补丁轮流套在暖方/冷方 */
@@ -119,6 +127,9 @@ export function validatePatchSet(patch: PatchSet): string[] {
             errors.push(`${at}.hook 必须是 ${PATCH_HOOKS.join(' / ')}`)
         }
     })
+    for (const [name, on] of Object.entries(patch.experiments ?? {})) {
+        if (typeof on !== 'boolean') errors.push(`experiments.${name} 必须是布尔值`)
+    }
     return errors
 }
 
@@ -151,6 +162,22 @@ export function reviewEnabled(): boolean {
 function patchFor(faction: string): PatchSet | null {
     if (!bank) return null
     return faction === Faction.WARM ? bank.warm ?? null : bank.cool ?? null
+}
+
+/** 该阵营是否开启了某处代码级改动；无补丁或未登记一律返回 false */
+export function experimentOn(faction: string | undefined, name: ExperimentName): boolean {
+    if (!faction) return false
+    return patchFor(faction)?.experiments?.[name] === true
+}
+
+/**
+ * 记录「这次实验真的改变了决策」。
+ * A/B 报告用命中数判断补丁有没有生效；开关本身没有候选可命中，
+ * 不登记就会出现「改动生效了却被判成 inconclusive」。
+ */
+export function noteExperiment(name: ExperimentName): void {
+    const key = `exp:${name}`
+    counters[key] = (counters[key] ?? 0) + 1
 }
 
 /**
