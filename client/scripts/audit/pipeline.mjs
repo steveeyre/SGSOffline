@@ -565,7 +565,12 @@ async function commandAb(flags) {
     console.log(`A/B：${patch.id}　${games} 个种子 × ${seats.length} 座位（处理 + 对照同批，${workers} 进程）`)
     const summary = await runEngineBatch({
         runDir: abDir,
-        spec: { runId: abId, mode: 'ab', patchId: patch.id, abSeats: seats.map(({ side, focus, ...rest }) => rest), maxSteps: 60000 },
+        spec: {
+            runId: abId, mode: 'ab', patchId: patch.id,
+            abSeats: seats.map(({ side, focus, ...rest }) => rest),
+            maxSteps: 60000,
+            poolVersion: typeof flags.pool === 'string' ? flags.pool : undefined,
+        },
         seeds,
         workers,
         stage: 'ab',

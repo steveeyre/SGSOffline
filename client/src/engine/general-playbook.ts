@@ -5,9 +5,10 @@
  * 新增武将时在此登记一条即可被拆牌、弃牌、选目标等逻辑共用。
  * 这里的每条结论都必须与 game-actions.ts 的实际结算一致，否则 AI 会做出引擎拒绝的操作。
  *
- * 已登记：奇才（拆牌目标过滤）、杀伤害加成来源、青囊（主动治疗）、拆牌位选择。
+ * 已登记：奇才（拆牌目标过滤）、杀伤害加成来源、青囊（主动治疗）、拆牌位选择、
+ * 断粮（合法目标）、解烦（目标阵营）、崩坏与将驰（选项取舍）。
  */
-import { Card, EquipSlot, EquipmentCardName, Faction, GameState, SeatRole } from 'sgs3v3-shared'
+import { BasicCardName, Card, EquipSlot, EquipmentCardName, Faction, GameState, SeatRole, TrickCardName } from 'sgs3v3-shared'
 import { hasSkillOf } from './ai-synergy'
 
 export type GeneralView = GameState['generals'][number]
@@ -199,4 +200,76 @@ export function pickYijiReceiver(
         (index === selfIndex ? -6 : 0)
     const best = [...receivers].sort((a, b) => need(b) - need(a))[0]
     return best ? best.index : -1
+}
+
+/**
+ * 断粮（徐晃）：能否对目标合法使用。
+ *
+ * 引擎要求距离 1 以内；界徐晃在目标手牌数不少于自己时可无视距离；黄月英的奇才同样无距离。
+ * 判定区已废除或已有兵粮寸断时会被引擎拒绝，AI 不应出价。
+ */
+export function duanliangTargetLegal(active: GeneralView, target: GeneralView, distance: number): boolean {
+    if (!target.alive || target.abolishedJudgeZone) return false
+    if (target.judgeZone.some((c) => c.name === TrickCardName.SUPPLY_SHORTAGE)) return false
+    if (hasSkillOf(active, 'huangyueying_qicai')) return true
+    if (active.generalId === 'xuhuang_jie' && target.hand.length >= active.hand.length) return true
+    return distance <= 1
+}
+
+export interface JiefanPlan {
+    targetIndex: number
+    enemies: number
+}
+
+/**
+ * 解烦（韩当）：限定技的目标必须是己方。
+ *
+ * 目标为敌人时，己方角色会弃武器或让敌人摸牌，等于白送；目标为队友时，
+ * 敌人只能弃武器或让队友摸牌。至少两名敌人在其攻击范围内才值得用。
+ */
+export function pickJiefanTarget(
+    generals: GameState['generals'],
+    faction: string | undefined,
+    enemiesInRange: (targetIndex: number) => number,
+): JiefanPlan | null {
+    if (!faction) return null
+    const plans = generals
+        .map((g, index) => ({ g, index }))
+        .filter(({ g }) => g.alive && g.faction === faction)
+        .map(({ g, index }) => ({ g, index, enemies: enemiesInRange(index) }))
+        .filter(({ enemies }) => enemies >= 2)
+        .sort((a, b) => b.enemies - a.enemies
+            || (b.g.seatRole === SeatRole.COMMANDER ? 1 : 0) - (a.g.seatRole === SeatRole.COMMANDER ? 1 : 0)
+            || a.g.hand.length - b.g.hand.length
+            || a.index - b.index)
+    const best = plans[0]
+    return best ? { targetIndex: best.index, enemies: best.enemies } : null
+}
+
+/**
+ * 崩坏（董卓）：失去 1 点体力或减 1 点体力上限。
+ *
+ * 减上限只在当前体力高于新上限时才连带扣当前体力；已受伤时减上限不疼，
+ * 满血时减上限等于双重损失，此时应选择失去体力。
+ */
+export function pickBanghuaiChoice(hp: number, maxHp: number): 'loseHp' | 'reduceMaxHp' {
+    return hp < maxHp ? 'reduceMaxHp' : 'loseHp'
+}
+
+/**
+ * 将驰（界曹彰）：摸一张牌（杀次数 -1、杀不计手牌上限）或重铸一张牌
+ * （杀无距离限制、次数 +1）。手里没有【杀】时重铸换来的距离用不上，摸牌更实在。
+ */
+export function pickJiangchiChoice(
+    hand: Card[],
+    hasRecast: boolean,
+    hasDraw: boolean,
+): 'recast' | 'draw' {
+    const junk = hand.filter((c) => c.name !== BasicCardName.ATTACK
+        && c.name !== BasicCardName.FIRE_SLASH && c.name !== BasicCardName.THUNDER_SLASH
+        && c.name !== BasicCardName.DODGE && c.name !== BasicCardName.PEACH).length
+    const hasSlash = hand.some((c) => c.name === BasicCardName.ATTACK
+        || c.name === BasicCardName.FIRE_SLASH || c.name === BasicCardName.THUNDER_SLASH)
+    if (hasRecast && junk > 0 && hand.length >= 2 && hasSlash) return 'recast'
+    return hasDraw ? 'draw' : 'recast'
 }

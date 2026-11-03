@@ -36,7 +36,7 @@ import { dodgeHoldValue, delayedSuccessChance, negateRisk, predictAoe, predictDu
 import { enemyPlans, guessHand, handDodgeChance, incomingDamage, knownSuits } from './ai-memory'
 import { beginDecision, endDecision } from './ai-audit'
 import { applyChoicePatches, applyPatchToOptions, experimentOn, forcedPlayRule, hasHookRules, noteExperiment, pickBestChoice, thresholdFor, type Choice } from './ai-variant'
-import { bestStealSlot, pickQingnangPlan, pickYijiReceiver, rendeOpportunity, stealableEquipSlots } from './general-playbook'
+import { bestStealSlot, duanliangTargetLegal, pickBanghuaiChoice, pickJiangchiChoice, pickJiefanTarget, pickQingnangPlan, pickYijiReceiver, rendeOpportunity, stealableEquipSlots } from './general-playbook'
 
 const SLASH_NAMES: string[] = [BasicCardName.ATTACK, BasicCardName.FIRE_SLASH, BasicCardName.THUNDER_SLASH]
 
@@ -3149,9 +3149,8 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
             .filter((c) => isBlackCard(c) && keepValue(c) <= 70 &&
                 (c.category === CardCategory.BASIC || c.category === CardCategory.EQUIPMENT))
             .sort((a, b) => keepValue(a) - keepValue(b))[0]
-        const target = enemies.find(
-            ({ g }) => distanceTo(state, active, g) <= 2 && !g.judgeZone.some((c) => c.name === TrickCardName.SUPPLY_SHORTAGE)
-        )
+        const target = enemies.find(({ g }) =>
+            duanliangTargetLegal(active, g, getAttackRange(active, g, state.generals).distance))
         if (blackBasic && target) {
             offer('skill:duanliang', 56 + (target.g.hand.length <= 2 ? 8 : 0), ['control'],
                 () => useSkill('xuhuang_duanliang', [target.index], [blackBasic.id]))
@@ -3334,18 +3333,12 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
         }
     }
     if (knowsSkill(active, 'handang_jiefan') && !limitedUsed('handang_jiefan')) {
-        const jiefanPlan = state.generals
-            .map((g, idx) => ({ g, idx }))
-            .filter(({ g, idx }) => g.alive && idx !== state.activeGeneralIndex)
-            .map(({ g, idx }) => ({
-                idx,
-                count: state.generals.filter((e) => e.alive && isEnemy(state, e, playerId)
-                    && getAttackRange(e, g, state.generals).inRange).length,
-            }))
-            .sort((a, b) => b.count - a.count)[0]
-        if (jiefanPlan && jiefanPlan.count >= 2) {
-            offer('skill:jiefan', 54 + jiefanPlan.count * 4, ['control'],
-                () => useSkill('handang_jiefan', [jiefanPlan.idx]))
+        const jiefanPlan = pickJiefanTarget(state.generals, active.faction, (targetIdx) =>
+            state.generals.filter((e) => e.alive && isEnemy(state, e, playerId)
+                && getAttackRange(e, state.generals[targetIdx], state.generals).inRange).length)
+        if (jiefanPlan) {
+            offer('skill:jiefan', 54 + jiefanPlan.enemies * 4, ['control'],
+                () => useSkill('handang_jiefan', [jiefanPlan.targetIndex]))
         }
     }
     if (knowsSkill(active, 'masu_sanyao') && enemies.length > 0) {
@@ -4488,8 +4481,8 @@ function pickSkillOptionRaw(
             return options[0]?.action ?? 'decline'
         }
         case 'dongzhuo_banghuai': {
-            if (has('reduceMaxHp') && (self?.hp ?? 3) <= 2) return 'reduceMaxHp'
-            return has('loseHp') ? 'loseHp' : options[0]?.action ?? 'decline'
+            const next = self ? pickBanghuaiChoice(self.hp, self.maxHp) : 'loseHp'
+            return has(next) ? next : options[0]?.action ?? 'decline'
         }
         case 'sunxiu_yanzhu': {
             // 宴诛：优先弃一张手牌，没有手牌时才交出装备区
@@ -4520,10 +4513,8 @@ function pickSkillOptionRaw(
             return has('draw') ? 'draw' : (has('heal') ? 'heal' : 'decline')
         }
         case 'caozhang_jiangchi': {
-            // 将驰：有废牌可重铸时选②（杀无距离且次数+1），否则选①
-            const jcJunk = self ? self.hand.filter((c) => !isSlash(c) && !isDodge(c) && !isPeach(c)).length : 0
-            if (has('recast') && jcJunk > 0 && (self?.hand.length ?? 0) >= 2) return 'recast'
-            return has('draw') ? 'draw' : 'recast'
+            const next = pickJiangchiChoice(self?.hand ?? [], has('recast'), has('draw'))
+            return has(next) ? next : options[0]?.action ?? 'decline'
         }
         case 'zhangsong_xiantu': {
             // 献图：只给己方；血够厚就给两张
