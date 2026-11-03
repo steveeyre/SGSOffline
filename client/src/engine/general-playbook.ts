@@ -52,7 +52,7 @@ export interface SlashBonus {
  *
  * 酒只绑定紧跟着的那一张【杀】。结算 current 时酒还没被 consumeWineBonus 清掉，
  * 所以酒要看 wineDrunk / wineBonusAttackNo；future 不含酒——之后还能不能吃到酒杀，
- * 取决于对手手里是否还有【酒】，由调用方按牌池另算。
+ * 取决于对手手里还有没有【酒】，由调用方按明牌另判。
  *
  * @param which current = 正在结算的这一刀；future = 之后还能打出的下一刀
  */
