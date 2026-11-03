@@ -1710,7 +1710,8 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             if (skillId === 'gongsunyuan_huaiyi') {
                 const max = Math.max(1, (ctx.maxPicks as number) ?? 1)
                 const self = state.generals[targetIndex]
-                const want = self && self.hp > 2 ? Math.min(2, max) : 1
+                // 获得多于一张要失去 1 点体力，换牌净收益为负，始终只取一张
+                const want = 1
                 const richest = candidates
                     .map((i) => ({ i, g: state.generals[i] }))
                     .filter(({ g }) => g?.alive && isEnemy(state, g, playerId)

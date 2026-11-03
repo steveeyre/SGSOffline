@@ -14,6 +14,9 @@ export type SelfPlayResult = {
     seed: number
 }
 
+/** 双方都打不动对方（如只剩对藤甲无解的主帅）时按平局收场，避免 60000 步空转 */
+const MAX_SELFPLAY_ROUNDS = 200
+
 function describePending(state: GameState): string {
     const p = state.pendingResponseQueue[0]
     if (!p) return 'none'
@@ -55,6 +58,9 @@ export function runSelfPlayGame(
         if (state.phase === GamePhase.PLAYING) {
             const over = checkGameOver(state)
             if (over.over) return { ok: true, winner: over.winnerFaction, steps, state, seed }
+            if (state.roundState.roundNumber > MAX_SELFPLAY_ROUNDS) {
+                return { ok: true, steps, state, seed }
+            }
         }
         if (state.phase === GamePhase.GAME_OVER) return { ok: true, steps, state, seed }
         processAutoExecutePending(state)
