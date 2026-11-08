@@ -25,7 +25,7 @@ import {
     syncCardState,
 } from './game-actions'
 import { addLog, checkGameOver, toClientView } from './game-state'
-import { aiRespond, aiAct, listPlayOptions, takeDraftTraces, takePlayTrace, takeSkillTrace } from './local-ai'
+import { aiRespond, aiAct, describeOption, takeDraftTraces, takePlayTrace, takeSkillTrace } from './local-ai'
 import { AI_PLAYER_ID, HUMAN_PLAYER_ID, createLocalMatch, currentPickFaction, handlePickYield, localDeployGenerals, localPickGeneral } from './local-match'
 import { chooseActionUnit, handleDiscard, handleEndTurn, handleYieldChoice, resumeStalledTurn } from './turn-manager'
 import { getRandomSeed } from './rng'
@@ -34,7 +34,6 @@ import { aiLandlordDraft } from '../modes/FightTheLandlord/landlord-draft'
 import { createLandlordMatch, landlordPickGeneral, setupLandlordPlay, type LandlordSide } from '../modes/FightTheLandlord/landlord-match'
 import { createPairMatch, pairPickGeneral, setupPairPlay } from '../modes/HappyPair/pair-match'
 import { aiPairDraft } from '../modes/HappyPair/pair-draft'
-import { applyLlmChoice, applyLlmDraft, buildLlmDraftPrompt, buildLlmPrompt, describeOption, draftFingerprint, isLlmAiEnabled, requestLlmChoice, ticketStillValid } from './llm-ai'
 
 let activeGame: GameState | null = null
 /** 斗地主：本地玩家执哪一方（统率三军为 null） */
@@ -116,7 +115,6 @@ export function startLocalMatch(humanFaction: Faction, seed?: number): void {
     hotseatMode = false
     activeLandlordSide = null
     activePairSide = null
-    resetLlmState()
     activeGame = createLocalMatch(humanFaction, seed)
     beginMatchLog(activeGame, getRandomSeed(), 'classic')
     const store = useGameStore.getState()
@@ -140,7 +138,6 @@ export function startLocalHotseatMatch(seed?: number): void {
     hotseatMode = true
     activeLandlordSide = null
     activePairSide = null
-    resetLlmState()
     activeGame = createLocalMatch(Faction.WARM, seed, true)
     beginMatchLog(activeGame, getRandomSeed(), 'hotseat')
     const store = useGameStore.getState()
@@ -164,8 +161,7 @@ export function startLocalLandlordMatch(side: LandlordSide, seed?: number): void
     hotseatMode = false
     activeLandlordSide = side
     activePairSide = null
-    resetLlmState()
-    activeGame = createLandlordMatch(side, seed, !isLlmAiEnabled())
+    activeGame = createLandlordMatch(side, seed)
     beginMatchLog(activeGame, getRandomSeed(), 'doudizhu')
     const store = useGameStore.getState()
     store.setHotseat(false)
@@ -188,8 +184,7 @@ export function startLocalPairMatch(side: Faction, seed?: number): void {
     hotseatMode = false
     activeLandlordSide = null
     activePairSide = side
-    resetLlmState()
-    activeGame = createPairMatch(side, seed, !isLlmAiEnabled())
+    activeGame = createPairMatch(side, seed)
     beginMatchLog(activeGame, getRandomSeed(), 'huanle_shuang')
     const store = useGameStore.getState()
     store.setHotseat(false)
@@ -215,7 +210,7 @@ export function dispatchLocalPairPick(seat: number, generalId: string): void {
     const decisionSnapshot = captureSnapshot(state)
     const result = pairPickGeneral(state, seat, generalId)
     if ('error' in result) return useGameStore.getState().setError(result.error)
-    // 规则 AI 补齐的选将轨迹记进对局日志（模型选择由 tryStartLlmDraft 记录）
+    // 规则 AI 补齐的选将轨迹记进对局日志
     recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
     publish()
@@ -227,18 +222,11 @@ export function dispatchLocalLandlordPick(poolIndex: number, generalId: string):
     if (!state) return
     const result = landlordPickGeneral(state, poolIndex, generalId)
     if ('error' in result) return useGameStore.getState().setError(result.error)
-    // AI 一方即时补齐（三方同时选）；开了本地模型则由模型逐个席位挑选
+    // AI 一方即时补齐（三方同时选）
     const logFrom = state.log.length
     const decisionSnapshot = captureSnapshot(state)
-    if (!isLlmAiEnabled()) {
-        aiLandlordDraft(state, () => {})
-        recordAiDecision(state, decisionSnapshot, logFrom)
-    } else if (!llmDraftBusy && !buildLlmDraftPrompt(state, AI_PLAYER_ID)) {
-        // 模型这边没有可问的席位（可能已作答或被判过无效）：规则 AI 直接补齐，
-        // 否则点完「确认选择」后页面会一直停在等待对手
-        aiLandlordDraft(state, () => {})
-        recordAiDecision(state, decisionSnapshot, logFrom)
-    }
+    aiLandlordDraft(state, () => {})
+    recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
     publish()
 }
@@ -246,7 +234,6 @@ export function dispatchLocalLandlordPick(poolIndex: number, generalId: string):
 export function exitLocalMatch(): void {
     stopPacing()
     finishMatchLog()
-    resetLlmState()
     activeGame = null
     hotseatMode = false
     activeLandlordSide = null
@@ -363,171 +350,11 @@ export function dispatchLocalRestart(): void {
     startLocalMatch(faction)
 }
 
-let llmBusy = false
-/** 上一次被模型/引擎判定无效的动作组合，避免在同一步反复追问 */
-let llmSkippedKey = ''
-/** 选将/布阵阶段正在等模型回复 */
-let llmDraftBusy = false
-/** 选将/布阵阶段上一次被判定无效的局面指纹 */
-let llmDraftSkippedKey = ''
-
-function resetLlmState(): void {
-    llmBusy = false
-    llmSkippedKey = ''
-    llmDraftBusy = false
-    llmDraftSkippedKey = ''
-    useGameStore.getState().setLlmThinking(null)
-}
-
-/** 模型思考标识：界面在等本地模型回复时显示“思考中……” */
-function setLlmThinking(scene: string | null): void {
-    useGameStore.getState().setLlmThinking(scene)
-}
-
-/** 模型不可用或输出无效时，选将退回规则 AI；斗地主/欢乐成双没有推进循环兜底，需要显式补齐 AI 席位 */
-function fallbackRuleDraft(state: GameState): void {
+/** 斗地主 / 欢乐成双的 AI 席位没有推进循环兜底，局面停在选将时要由规则 AI 补齐 */
+function fillAiDraftByRule(state: GameState): void {
+    if (hotseatMode || state.phase !== GamePhase.GENERAL_PICK) return
     if (state.mode === GameMode.DOUDIZHU) aiLandlordDraft(state, () => setupLandlordPlay(state))
-    if (state.mode === GameMode.HUANLE_SHUANG) aiPairDraft(state, () => setupPairPlay(state))
-}
-
-/**
- * 轮到 AI 选将/布阵时同样先问本地模型：选项就是候选武将或部署方案，模型只挑一个 id。
- * 返回 true 表示已发出请求，本次推进暂停，等模型回复后再继续。
- */
-function tryStartLlmDraft(state: GameState): boolean {
-    if (!isLlmAiEnabled()) {
-        // AI 席位是靠模型补齐的，中途关掉模型时要让规则 AI 接手
-        if ((state.mode === GameMode.DOUDIZHU || state.mode === GameMode.HUANLE_SHUANG)
-            && state.phase === GamePhase.GENERAL_PICK) fallbackRuleDraft(state)
-        return false
-    }
-    if (hotseatMode || llmDraftBusy) return false
-    if (state.phase !== GamePhase.GENERAL_PICK && state.phase !== GamePhase.DEPLOY) return false
-    const request = buildLlmDraftPrompt(state, AI_PLAYER_ID)
-    if (!request) return false
-    const key = draftFingerprint(state)
-    if (key === llmDraftSkippedKey) {
-        // 这个局面已经被模型答废过一次：必须让规则 AI 补齐席位，否则选将页会一直停在“等待对手选将”
-        if (state.mode === GameMode.DOUDIZHU || state.mode === GameMode.HUANLE_SHUANG) fallbackRuleDraft(state)
-        return false
-    }
-    const decisionSnapshot = captureSnapshot(state)
-    const logFrom = state.log.length
-    llmDraftBusy = true
-    setLlmThinking('选将')
-    // 先把最新局面推给界面：模型思考期间界面停在旧状态，玩家会点到已经失效的武将卡
-    reveal(state)
-    console.debug('[llm] 询问本地模型（选将）', { phase: state.phase, options: request.options.length })
-    void requestLlmChoice(request.system, request.prompt, 'fast', request.optionIds, false).then((choice) => {
-        llmDraftBusy = false
-        setLlmThinking(null)
-        if (activeGame !== state) return
-        const option = choice ? request.options.find((o) => o.id === choice) : undefined
-        const stale = !choice || draftFingerprint(state) !== key
-        if (stale || !option || !applyLlmDraft(state, AI_PLAYER_ID, option)) {
-            console.debug('[llm] 选将响应无效或局面已变，回退规则 AI', choice)
-            llmDraftSkippedKey = key
-            fallbackRuleDraft(state)
-            publish()
-            return
-        }
-        recordDecision(state, {
-            kind: 'pick',
-            source: 'llm',
-            side: 'ai',
-            seat: Math.max(0, state.activeGeneralIndex),
-            plan: option.key,
-            snapshot: decisionSnapshot,
-            candidates: request.options.map((o) => ({
-                id: o.id,
-                ruleId: o.key,
-                label: o.label,
-                score: o.score,
-                chosen: o.id === choice,
-            })),
-            chosen: {
-                id: option.id,
-                ruleId: option.key,
-                label: option.label,
-                score: option.score,
-                chosen: true,
-            },
-            logs: state.log.slice(logFrom).map((l) => l.text),
-        })
-        publish()
-    })
-    return true
-}
-
-/**
- * 轮到 AI 出牌时先问本地模型：引擎枚举当前全部合法动作，模型只挑一个选项 id。
- * 返回 true 表示已发出请求，本次推进暂停，等模型回复（或超时）后再继续。
- */
-function tryStartLlm(state: GameState): boolean {
-    if (!isLlmAiEnabled() || hotseatMode || llmBusy) return false
-    if (state.phase !== GamePhase.PLAYING || state.turnPhase !== TurnPhase.ACTION) return false
-    if (state.pendingResponseQueue.length > 0 || state.negateWindow) return false
-    const active = state.generals[state.activeGeneralIndex]
-    if (!active || active.playerId !== AI_PLAYER_ID || !active.alive) return false
-    const turnKey = `${state.roundState.roundNumber}:${state.activeGeneralIndex}`
-    const actionKey = `${turnKey}:${state.log.length}:${active.hand.length}`
-    if (actionKey === llmSkippedKey) return false
-    const options = listPlayOptions(state, AI_PLAYER_ID)
-    if (options.length === 0) return false
-    const { system, prompt, ticket } = buildLlmPrompt(state, AI_PLAYER_ID, options)
-    const decisionSnapshot = captureSnapshot(state)
-    const logFrom = state.log.length
-    llmBusy = true
-    setLlmThinking('出牌')
-    // 同上：模型思考期间先把最新局面推给界面
-    reveal(state)
-    console.debug('[llm] 询问本地模型', { tier: ticket.tier, options: options.length, turn: turnKey })
-    void requestLlmChoice(system, prompt, ticket.tier, ticket.optionIds).then((choice) => {
-        llmBusy = false
-        setLlmThinking(null)
-        if (activeGame !== state) return
-        if (!choice || !ticketStillValid(state, ticket)) {
-            console.debug('[llm] 模型响应无效或局面已变，回退规则 AI', choice)
-            llmSkippedKey = actionKey
-            publish()
-            return
-        }
-        const picked = options.find(o => o.id === choice)
-        const result = applyLlmChoice(state, AI_PLAYER_ID, choice)
-        if (result === 'invalid') {
-            console.debug('[llm] 模型选项执行失败，回退规则 AI', choice)
-            llmSkippedKey = actionKey
-            publish()
-            return
-        }
-        recordDecision(state, {
-            kind: 'play',
-            source: 'llm',
-            side: 'ai',
-            seat: ticket.activeIndex,
-            plan: picked?.key,
-            snapshot: decisionSnapshot,
-            candidates: options.map(o => ({
-                id: o.id,
-                ruleId: o.key,
-                label: describeOption(o.key),
-                score: o.score,
-                chosen: o.id === choice,
-            })),
-            chosen: picked
-                ? {
-                    id: picked.id,
-                    ruleId: picked.key,
-                    label: describeOption(picked.key),
-                    score: picked.score,
-                    chosen: true,
-                }
-                : null,
-            logs: state.log.slice(logFrom).map(l => l.text),
-        })
-        publish()
-    })
-    return true
+    else if (state.mode === GameMode.HUANLE_SHUANG) aiPairDraft(state, () => setupPairPlay(state))
 }
 
 function runHuman(
@@ -632,8 +459,7 @@ function runSteps(state: GameState, token: number): void {
             reveal(state)
             return
         }
-        if (tryStartLlmDraft(state)) return
-        if (tryStartLlm(state)) return
+        fillAiDraftByRule(state)
         const logBefore = state.log.length
         let advanced = false
         try {
@@ -677,6 +503,7 @@ function recordAiDecision(state: GameState, decisionSnapshot: DecisionSnapshot, 
     for (const draft of drafts) {
         const winner = draft.candidates.find(c => c.chosen)
         recordDecision(state, {
+            logFrom,
             kind: 'pick',
             source: 'rule',
             side: 'ai',
@@ -699,6 +526,7 @@ function recordAiDecision(state: GameState, decisionSnapshot: DecisionSnapshot, 
     if (play) {
         const winner = play.candidates.find(c => c.chosen)
         recordDecision(state, {
+            logFrom,
             kind: 'play',
             source: 'rule',
             side: 'ai',
@@ -728,6 +556,7 @@ function recordAiDecision(state: GameState, decisionSnapshot: DecisionSnapshot, 
     }
     if (skill) {
         recordDecision(state, {
+            logFrom,
             kind: 'skill',
             source: 'rule',
             side: 'ai',

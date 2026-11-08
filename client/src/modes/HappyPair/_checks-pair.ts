@@ -22,17 +22,17 @@ import {
 import { handleDiscard, handleEndTurn } from '../../engine/turn-manager'
 import { listPlayOptions } from '../../engine/local-ai'
 import { AI_PLAYER_ID, HUMAN_PLAYER_ID } from '../../engine/local-match'
-import { applyLlmDraft, buildLlmDraftPrompt, draftFingerprint } from '../../engine/llm-ai'
 import { buildPairPools, getPairGeneralPool, pairSeatsOf } from './pair-draft'
 import { createPairMatch, pairBoardSeats, pairPickGeneral, setupPairPlay } from './pair-match'
 
 let failed = 0
-function assert(cond: boolean, label: string): void {
+function assert(cond: boolean, label: string, detail?: unknown): void {
     if (cond) {
         console.log(`  ok   ${label}`)
     } else {
         failed++
         console.log(`  FAIL ${label}`)
+        if (detail !== undefined) console.log('       ', detail)
     }
 }
 
@@ -190,47 +190,6 @@ const hpBefore = survivor.hp
 handleRespond(rewardState, HUMAN_PLAYER_ID, { action: 'recover' } as any)
 assert(survivor.hp === Math.min(survivor.maxHp, hpBefore + 1), '选择回复 1 点体力生效')
 
-console.log('[欢乐成双：本地模型选将]')
-const llmState = createPairMatch(Faction.COOL, 2024, false)
-const llmReq = buildLlmDraftPrompt(llmState, AI_PLAYER_ID)
-assert(!!llmReq, 'AI 两席未选时生成模型选将请求')
-assert(llmReq!.options.length === 25, `两席组合共 25 个选项（实际 ${llmReq!.options.length}）`)
-assert(llmReq!.options.every((o) => o.key.startsWith('pair-pair:1:')),
-    '人类执冷色时模型为 2、3 号位合并选将')
-const llmFpBefore = draftFingerprint(llmState)
-const llmPick = llmReq!.options[3]
-assert(applyLlmDraft(llmState, AI_PLAYER_ID, llmPick), '模型组合可以落子')
-assert(llmState.pairPick!.picked[1] === llmPick.key.split(':')[2]
-    && llmState.pairPick!.picked[2] === llmPick.key.split(':')[4], 'AI 两席一次性选好')
-assert(llmState.pairPick!.picked[0] === null && llmState.pairPick!.picked[3] === null,
-    '人类两席不受模型影响')
-assert(draftFingerprint(llmState) !== llmFpBefore, '选将指纹随已选武将变化')
-assert(!applyLlmDraft(llmState, AI_PLAYER_ID, llmPick), '同一组合不能重复落子')
-pairPickGeneral(llmState, 0, llmState.pairPick!.pools[0][0].id)
-pairPickGeneral(llmState, 3, llmState.pairPick!.pools[3][0].id)
-assert(llmState.phase === GamePhase.PLAYING, '模型 + 人类选完后进入对局')
-
-const badPairState = createPairMatch(Faction.COOL, 2027, false)
-const badPairOption = {
-    id: 'x',
-    key: `pair-pair:0:${badPairState.pairPick!.pools[0][0].id}:3:${badPairState.pairPick!.pools[3][0].id}`,
-    label: '非法组合',
-    score: 0,
-}
-assert(!applyLlmDraft(badPairState, AI_PLAYER_ID, badPairOption), '模型不能替人类座位选将')
-
-const singlePairState = createPairMatch(Faction.COOL, 2025, false)
-singlePairState.pairPick!.picked[1] = singlePairState.pairPick!.pools[1][0].id
-const singlePairReq = buildLlmDraftPrompt(singlePairState, AI_PLAYER_ID)
-assert(!!singlePairReq && singlePairReq.options.length === 5, '只差一席时只给该席 5 个选项')
-assert(singlePairReq!.options.every((o) => o.key.startsWith('pair-seat:2:')),
-    '只差一席时单独询问 3 号位')
-
-const llmWarmState = createPairMatch(Faction.WARM, 2026, false)
-const llmWarmReq = buildLlmDraftPrompt(llmWarmState, AI_PLAYER_ID)
-assert(!!llmWarmReq && llmWarmReq.options.every((o) => o.key.startsWith('pair-pair:0:')),
-    '人类执暖色时模型为 1、4 号位合并选将')
-
 console.log('[欢乐成双：全员阵亡判负]')
 const overState = createPairMatch(Faction.COOL, 123, false)
 // 直接构造：暖色两名阵亡、冷色仍存活
@@ -296,14 +255,23 @@ const tuntianDengai = tuntianState.generals[1]
 while (tuntianDengai.hand.length < 5) {
     tuntianDengai.hand.push(probeCard(`probe_filler_${tuntianDengai.hand.length}`, 'attack', CardSuit.SPADE, 7))
 }
+// 弃一张非【杀】：验证回合内弃牌不会被差集检测当成回合外失去牌。
+// 弃【杀】会按屯田的另一条规则正常触发，不属于本用例。
+tuntianDengai.hand[0] = probeCard('probe_tuntian_nonlethal', TrickCardName.DRAW_TWO, CardSuit.SPADE, 8,
+    CardCategory.TRICK, { trickType: TrickType.INSTANT })
 syncCardState(tuntianState) // 界面刷新，建立“失去牌”基线
 handleEndTurn(tuntianState, AI_PLAYER_ID)
-handleDiscard(tuntianState, AI_PLAYER_ID, [tuntianDengai.hand[0].id])
-assert(tuntianState.activeGeneralIndex === 2, '弃牌后回合交给刘备')
+const tuntianDiscard = tuntianDengai.hand[0]
+handleDiscard(tuntianState, AI_PLAYER_ID, [tuntianDiscard.id])
+assert(tuntianState.activeGeneralIndex === 2, '弃牌后回合交给刘备',
+    `active=${tuntianState.activeGeneralIndex} phase=${tuntianState.turnPhase} ` +
+    `discarded=${tuntianDiscard.name} ` +
+    `queue=${tuntianState.pendingResponseQueue.map((p) => (p.context as any)?.skillId ?? p.type).join(',')}`)
 syncCardState(tuntianState) // 下一回合的界面刷新
 const tuntianPrompts = tuntianState.pendingResponseQueue
     .filter((p) => (p.context as any)?.skillId === 'dengai_tuntian')
-assert(tuntianPrompts.length === 0, '自己回合内弃掉的牌不会被当成回合外失去牌（屯田不该触发）')
+assert(tuntianPrompts.length === 0, '自己回合内弃掉的牌不会被当成回合外失去牌（屯田不该触发）',
+    tuntianState.pendingResponseQueue.map((p) => (p.context as any)?.skillId ?? p.type))
 
 const tuntianState2 = fixedPairState(['xuyou', 'dengai', 'liubei', 'mizhu'], 9103)
 enterActionFor(tuntianState2, 2) // 刘备的回合

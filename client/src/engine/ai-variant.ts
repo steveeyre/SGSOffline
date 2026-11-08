@@ -337,6 +337,17 @@ export function thresholdFor(context: DecisionContext | null, name: ThresholdNam
     for (const rule of patch.rules) {
         if (rule.type === 'threshold' && rule.name === name) value = rule.value
     }
-    if (value !== fallback) thresholdCounters[name] = (thresholdCounters[name] ?? 0) + 1
     return value
+}
+
+/**
+ * 记录「这次阈值改动真的改变了决策」。
+ *
+ * 不能在 thresholdFor 里按读取次数计数：门槛在每个决策点都会被读一次，
+ * 绝大多数读取根本不影响结论。PASS_SCORE 20→16 的补丁曾因此报告 102958 次
+ * 「生效」却零次翻转，A/B 把「一次都没改变决策」误报成「大量命中但无差异」。
+ * 计数必须由调用方在结论确实被改动时显式登记。
+ */
+export function noteThresholdDecision(name: ThresholdName): void {
+    thresholdCounters[name] = (thresholdCounters[name] ?? 0) + 1
 }

@@ -79,8 +79,8 @@ function activationInputsFor(state: GameState, pending: PendingResponse): Activa
     if (pending.type !== ResponseType.SKILL_ACTIVATE_CONFIRM) return null
     const ctx = pending.context as any
     if (!ctx?.skillId) return null
-    // 选项型询问本身就是“选什么”，不叠加目标/选牌
-    if ((ctx.options as unknown[] | undefined)?.length) return null
+    // 选项型询问本身就是“选什么”，不叠加目标/选牌（献图例外：选项只决定交牌张数）
+    if ((ctx.options as unknown[] | undefined)?.length && ctx.skillId !== 'zhangsong_xiantu') return null
     const selfIdx = pending.targetGeneralIndex
     const self = state.generals[selfIdx]
     if (!self?.alive) return null
@@ -127,6 +127,24 @@ function activationInputsFor(state: GameState, pending: PendingResponse): Activa
             const candidates = others.filter(({ g }) => g.hand.length > 0).map(({ i }) => i)
             if (candidates.length === 0) return null
             return { targetSelectOnActivate: true, minTargets: 1, maxTargets: 1, targetCandidates: candidates }
+        }
+        case 'xiaoqiao_tianxiang_luoshu': {
+            const hasHeart = (c: Card) => c.suit === CardSuit.HEART
+                || (c.suit === CardSuit.SPADE
+                    && (getGeneralById(self.generalId)?.skills.some(s => s.id === 'xiaoqiao_hongyan') ?? false))
+            const hearts = self.hand.filter(hasHeart).map(c => c.id)
+            if (hearts.length === 0 || otherIndices.length === 0) return null
+            return {
+                targetSelectOnActivate: true, minTargets: 1, maxTargets: 1, targetCandidates: otherIndices,
+                cardSelectOnActivate: true, minCards: 1, maxCards: 1, candidateCardIds: hearts,
+            }
+        }
+        case 'zhangsong_xiantu': {
+            if (self.hand.length === 0) return null
+            return {
+                cardSelectOnActivate: true, minCards: 1, maxCards: 2,
+                candidateCardIds: self.hand.map(c => c.id),
+            }
         }
         case 'zhangxiu_congjian':
         case 'sunqian_qianya':
@@ -278,6 +296,7 @@ export function toClientView(
         harvestPool: state.harvestPool,
         // 单机/热座的对局日志就是本机内存里的完整记录，不截断；
         // 界面只负责按需渲染最近若干条，早先的日志仍可展开查看
+        matchId: state.matchId,
         log: [...state.log],
     }
 }
@@ -372,6 +391,7 @@ export function toSpectatorView(
         } : undefined,
         roundState: state.roundState,
         harvestPool: state.harvestPool,
+        matchId: state.matchId,
         log: [...state.log],
         isSpectator: true,
     }
@@ -381,7 +401,9 @@ export function toSpectatorView(
  * 添加日志条目
  */
 export function addLog(state: GameState, text: string): void {
-    state.log.push({ timestamp: Date.now(), text })
+    const seq = (state.logSeq ?? 0) + 1
+    state.logSeq = seq
+    state.log.push({ timestamp: Date.now(), text, seq, matchId: state.matchId })
 }
 
 /**

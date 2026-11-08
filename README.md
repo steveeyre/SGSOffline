@@ -1,4 +1,4 @@
-# 三国杀 3v3 单机版
+# 三国杀单机版
 
 **版本 1.0.0** ｜ 纯前端单机对战 ｜ 无需注册、无需联网
 
@@ -24,7 +24,7 @@
 
 ## 规则实现
 
-- 服务端权威的完整规则引擎已迁移为浏览器内引擎，支持选将、部署、行动单元、响应链与濒死结算
+- 规则引擎完全运行在浏览器内，没有后端依赖：选将、部署、行动单元、响应链与濒死结算都在前端完成
 - 108 / 156 张牌堆、装备、延时锦囊、判定、拼点、觉醒/限定技等
 - 响应队列统一处理「使用杀 → 出闪 → 鬼才 → 天香 → 濒死求桃」等链式交互
 - 规则 AI 分四层：出牌评分（ai-policy）、公开信息记忆（ai-memory）、结果预测（ai-forecast）、集火与意图分析（ai-strategy），只使用公开信息，不读取对手暗牌
@@ -40,7 +40,7 @@ npm install
 npm run build:standalone
 ```
 
-构建完成后用浏览器打开 `release/SGS3v3.html`。武将原画已内嵌，不需要联网，也不需要启动服务。
+构建完成后双击仓库根目录的 `SGSOffline.html` 即可开玩。武将原画已内嵌，不需要联网，也不需要启动服务。
 
 > 离线包不包含背景音乐。需要 BGM 时，把 `bgm.flac` 放到生成的 html 同目录即可。
 
@@ -50,22 +50,19 @@ npm run build:standalone
 
 ```bash
 npm install
-
-# 单机对战只需要前端
 npm run dev:client      # http://localhost:5174
-
-# 或同时启动前后端（含联机/本地模型实验接口）
-npm run dev             # 前端 5174，后端 3001
 ```
+
+Windows 下也可以直接双击仓库根目录的 `SGSOffline.html`：不装依赖、不起服务、不打开终端窗口，也不会启动任何本地模型服务。该文件是构建产物，不入库，需要时用 `npm run build:standalone` 重新生成。
 
 ## 构建
 
 ```bash
-npm run build             # 构建 shared / client / server
-npm run build:standalone  # 生成离线单文件 release/SGS3v3.html
+npm run build             # 构建 shared / client
+npm run build:standalone  # 生成根目录的离线单文件 SGSOffline.html
 ```
 
-`release/` 下的离线包属于构建产物，已加入 `.gitignore`，不会提交到仓库。
+根目录的 `SGSOffline.html` 属于构建产物，已加入 `.gitignore`，不会提交到仓库。
 
 ## 自检
 
@@ -87,12 +84,10 @@ SGSOffline/
 │       ├── modes/             斗地主（FightTheLandlord）、欢乐成双（HappyPair）
 │       ├── pages/             大厅、选将、对战、本地对战、结算
 │       ├── store/             Zustand 状态
-│       └── socket/            Socket.IO 封装（本地对局时直接转发到引擎）
-├── server/                    联机房间与本地模型实验（1.0 单机流程不使用）
-├── shared/                    前后端共享类型与通信协议
-├── docs/                      早期 3v3 联机版的 PRD 与开发文档
-├── release/                   离线单文件产物目录（构建生成，不纳入版本控制）
-├── start-local-ai.bat         早期 Ollama 本地模型启动脚本（1.0 默认使用规则 AI）
+│       └── actions.ts         页面操作 → 本地引擎的派发层
+├── shared/                    引擎与页面共用的类型定义
+├── docs/                      开发文档与 AI 设计说明
+├── SGSOffline.html            离线单文件（构建生成，不纳入版本控制）
 └── package.json               npm workspaces 根配置
 ```
 
@@ -104,9 +99,9 @@ SGSOffline/
 
 ## 已知限制
 
-- 1.0 以单机对战为主；`server/` 是早期联机房间与本地模型实验代码，在线模式不在本版本的支持范围内
-- `start-local-ai.bat` 为历史实验脚本，当前大厅不会启用本地模型 AI
-- `docs/` 中的 PRD、开发文档描述的是最初 3v3 联机版本，部分内容已与单机版不一致，接口与结构请以源码为准
+- 1.0 只支持单机对战（含同屏本地对战），没有联机模式
+- 对局 AI 全部由规则引擎实现，不接入本地大模型；`client/scripts/audit/` 下的复盘脚本仍可选装 Ollama，但只用于离线调参，与游戏运行无关
+- `docs/DEVELOPMENT.md` 描述当前 1.0 结构；更细的 AI 设计见 `docs/` 下的专题文档
 
 ## License
 

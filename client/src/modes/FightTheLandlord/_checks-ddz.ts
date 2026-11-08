@@ -12,7 +12,7 @@ import {
 } from 'sgs3v3-shared'
 import { createDeck158 } from '../../engine/cards'
 import { checkGameOver } from '../../engine/game-state'
-import { getGeneralPool } from '../../engine/generals'
+import { getGeneralById, getGeneralPool } from '../../engine/generals'
 import { dealDamage, handleRespond } from '../../engine/game-actions'
 import { continueTurnFromJudge } from '../../engine/turn-manager'
 import { aiLandlordDraft, buildLandlordPools, getLandlordGeneralPool } from './landlord-draft'
@@ -96,12 +96,16 @@ assert(state.generals[0].faction === Faction.WARM && state.generals[0].seatRole 
 assert(state.generals[1].faction === Faction.COOL && state.generals[2].faction === Faction.COOL,
     '2、3 号位为农民')
 assert(state.generals[1].playerId === state.generals[2].playerId, '两名农民由同一玩家控制')
+const landlordDef = getGeneralById(state.generals[0].generalId)!
 assert(state.generals[0].maxHp === state.generals[0].hp
-    && state.generals[0].maxHp >= 5, `地主体力上限+1（${state.generals[0].hp}/${state.generals[0].maxHp}）`)
+    && state.generals[0].maxHp === landlordDef.maxHp + 1,
+    `地主体力上限+1（${state.generals[0].hp}/${state.generals[0].maxHp}，基础 ${landlordDef.maxHp}）`)
 assert(state.generals[0].acquiredSkills.includes('doudizhu_feiyang')
     && state.generals[0].acquiredSkills.includes('doudizhu_bahu'), '地主获得【飞扬】【跋扈】')
 assert(state.generals.every((g) => g.hand.length >= 4), '三人初始各 4 张手牌')
-assert(state.deck.length === 158 - 12 - 3, `牌堆 = 156 + 2 闪电 - 12 张起手 - 地主首回合摸3（实际 ${state.deck.length}）`)
+const totalCards = state.deck.length + state.discard.length + state.generals.reduce(
+    (n, g) => n + g.hand.length + Object.values(g.equip).filter(Boolean).length, 0)
+assert(totalCards === 158, `牌堆+手牌+弃牌 = 158（实际 ${totalCards}，牌堆 ${state.deck.length}）`)
 assert(state.log.some((l) => l.text.includes('跋扈')), '首回合【跋扈】摸牌')
 assert(state.activeGeneralIndex === 0, '地主先手')
 

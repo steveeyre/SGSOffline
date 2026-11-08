@@ -66,7 +66,7 @@ export function createLandlordMatch(side: LandlordSide, seed: number = newRandom
     }
     addLog(state, `随机种子 ${seed}（出现异常时可用此种子复现本局）`)
     addLog(state, '斗地主模式：地主 6 选 1，农民各 5 选 1，同时进行')
-    // autoDraft=false 时把 AI 席位的选将留给调用方（本地模型接入时用）
+    // autoDraft=false 时把 AI 席位的选将留给调用方（自对弈/校测构造固定阵容用）
     if (autoDraft) aiLandlordDraft(state, () => setupLandlordPlay(state))
     return state
 }

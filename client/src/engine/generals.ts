@@ -135,6 +135,14 @@ export const GENERALS: GeneralDefinition[] = [
         }],
     },
     {
+        id: 'liubei_jie', name: '界刘备', maxHp: 4, gender: 'male', kingdom: 'shu',
+        skills: [{
+            id: 'liubei_rende', name: '仁德',
+            description: '出牌阶段，你可将任意张手牌给予其他角色。每通过此技能给出第2张牌时，回复1点体力。',
+            type: SkillType.ACTIVE, trigger: SkillTrigger.ACTIVE,
+        }],
+    },
+    {
         id: 'guanyu', name: '关羽', maxHp: 4, gender: 'male', kingdom: 'shu',
         skills: [
             {
@@ -173,7 +181,7 @@ export const GENERALS: GeneralDefinition[] = [
         ],
     },
     {
-        id: 'zhaoyun', name: '赵云', maxHp: 4, gender: 'male', kingdom: 'shu',
+        id: 'zhaoyun_jing', name: '赵云-竞', maxHp: 4, gender: 'male', kingdom: 'shu',
         skills: [
             {
                 id: 'zhaoyun_longdan', name: '龙胆',
@@ -317,14 +325,29 @@ export const GENERALS: GeneralDefinition[] = [
         id: 'xiaoqiao', name: '小乔', maxHp: 3, gender: 'female', kingdom: 'wu',
         skills: [
             {
-                id: 'xiaoqiao_tianxiang', name: '天香',
-                description: '你受到伤害时，可弃置一张红桃手牌，将此伤害转移给另一名角色，然后该角色摸X张牌（X为其已损失的体力值）。',
+                id: 'xiaoqiao_tianxiang_luoshu', name: '天香',
+                description: '当你受到伤害时，你可以弃置一张♥手牌，防止此伤害并选择一名其他角色，若如此做，你选择一项：1.令其受到伤害来源对其造成的1点伤害，然后其摸X张牌（X为其已损失的体力值，至多5）；2.令其失去1点体力，然后其获得你弃置的牌。',
                 type: SkillType.PASSIVE, trigger: SkillTrigger.ON_DAMAGE_RECEIVED,
             },
             {
                 id: 'xiaoqiao_hongyan', name: '红颜',
                 description: '锁定技，你的黑桃牌视为红桃牌。',
                 type: SkillType.LOCKED, trigger: SkillTrigger.ON_USE_CARD,
+            },
+        ],
+    },
+    {
+        id: 'xuezong', name: '薛综', maxHp: 3, gender: 'male', kingdom: 'wu',
+        skills: [
+            {
+                id: 'xuezong_funan', name: '复难',
+                description: '当其他角色使用或打出牌响应你使用的牌时，你可以令其获得你使用的牌（其本回合不能使用或打出此牌），然后你获得其使用或打出的牌。',
+                type: SkillType.PASSIVE, trigger: SkillTrigger.ON_USE_CARD,
+            },
+            {
+                id: 'xuezong_jiexun', name: '诫训',
+                description: '结束阶段，你可以令一名其他角色摸等同于场上♦牌数的牌，然后其弃置X张牌（X为此前此技能发动过的次数）。若该角色因此弃置了所有牌，你失去此技能，并将复难改为“当其他角色使用或打出牌响应你使用的牌时，你获得其使用或打出的牌，并可令其获得你使用的牌（其本回合不能使用或打出此牌）。”',
+                type: SkillType.ACTIVE, trigger: SkillTrigger.ON_TURN_END,
             },
         ],
     },
@@ -1228,21 +1251,6 @@ export const GENERALS: GeneralDefinition[] = [
                 id: 'quancong_zhenshan', name: '赈赡',
                 description: '每回合限一次，当你需要使用或打出基本牌时，你可以与手牌数小于你的一名角色交换手牌，视为使用或打出之，然后可以发动一次【邀名】。',
                 type: SkillType.PASSIVE, trigger: SkillTrigger.ON_USE_CARD,
-            },
-        ],
-    },
-    {
-        id: 'xiaoqiao_luoshu', name: '小乔', maxHp: 3, gender: 'female', kingdom: 'wu',
-        skills: [
-            {
-                id: 'xiaoqiao_tianxiang_luoshu', name: '天香',
-                description: '当你受到伤害时，你可以弃置一张♥手牌，防止此伤害并选择一名其他角色，若如此做，你选择一项：1.令其受到伤害来源对其造成的1点伤害，然后其摸X张牌（X为其已损失的体力值，至多5）；2.令其失去1点体力，然后其获得你弃置的牌。',
-                type: SkillType.PASSIVE, trigger: SkillTrigger.ON_DAMAGE_RECEIVED,
-            },
-            {
-                id: 'xiaoqiao_hongyan', name: '红颜',
-                description: '锁定技，你的黑桃牌视为红桃牌。',
-                type: SkillType.LOCKED, trigger: SkillTrigger.ON_USE_CARD,
             },
         ],
     },
@@ -2411,13 +2419,18 @@ export const GENERALS: GeneralDefinition[] = [
         skills: [
             {
                 id: 'shenlusu_tamo', name: '榻谟',
-                description: '限定技，出牌阶段，你可以重新分配所有角色的座次（换位不影响行动顺序），然后你失去X点体力（X为你当前体力值减去本局发动“定州”的次数）。',
+                description: '限定技，出牌阶段，你失去1点体力，然后重新排列所有角色的座次（此调整不影响行动顺序）。',
                 type: SkillType.LIMITED, trigger: SkillTrigger.ACTIVE,
             },
             {
                 id: 'shenlusu_dingzhou', name: '定州',
-                description: '出牌阶段限一次，你可以交给一名场上有牌的其他角色X张牌（X为其场上牌的数量），然后你获得其场上的所有牌。',
+                description: '出牌阶段限一次，你可以交给一名场上有牌的其他角色X张牌（X为其场上的牌的数量），然后你获得其场上的所有牌。',
                 type: SkillType.ACTIVE, trigger: SkillTrigger.ACTIVE,
+            },
+            {
+                id: 'shenlusu_zhimeng', name: '智盟',
+                description: '回合结束后，你可以选择一名手牌数不大于Y的其他角色（Y为你的手牌数+1），然后随机平分你与其的所有手牌（若这些牌的数量为奇数，则你获得的牌的数量较多）。',
+                type: SkillType.PASSIVE, trigger: SkillTrigger.ON_TURN_END,
             },
         ],
     },
@@ -2650,86 +2663,66 @@ export const CUSTOM_POOL_IDS: string[] = [
     // 魏 (18)
     'guojia', 'zhangliao', 'zhenji', 'wenpin', 'xiahoudun_jing', 'lidian_jie',
     'simayi_jie', 'xuchu_jie', 'dengai', 'xunyou', 'wangyi', 'wangji',
-    'yuejin', 'simalang', 'litong', 'caocao_jie', 'dianwei_jie', 'xuhuang', 'caoren_sp',
+    'yuejin', 'simalang', 'litong', 'caocao_jie', 'dianwei_jie', 'xuhuang_jie',
     // 蜀 (14)
-    'liubei', 'zhangfei', 'zhugeliang', 'huangyueying', 'zhaoyun', 'jiangwei',
+    'liubei_jie', 'zhangfei', 'zhugeliang', 'huangyueying', 'zhaoyun_jing', 'jiangwei',
     'machao_jie', 'madai', 'sunshangxiang_sp', 'zhoucang', 'yanyan', 'wangping',
-    'huangquan_jing', 'sunqian', 'dongyun',
+    'huangquan_jing', 'sunqian',
     // 吴 (18)
     'sunquan', 'huanggai', 'zhugejin', 'sunjian', 'daqiao', 'xiaoqiao',
-    'sunshangxiang', 'lingtong', 'ganning_jie', 'zhouyu_jie', 'sunce',
-    'luxun_jie', 'guyong', 'dingfeng', 'yufan', 'zumao', 'zhugeke', 'lingcao',
+    'lingtong', 'ganning_jie', 'zhouyu_jie', 'sunce', 'luxun_jie', 'guyong', 'dingfeng',
+    'yufan', 'zumao', 'zhugeke', 'lingcao', 'zhuhuan',
     // 群 (10)
     'zhangjiao', 'huatuo', 'jiaxu', 'diaochan', 'chengong', 'caifuren',
     'jushou', 'lvbu_jing', 'pangde', 'fuwan',
 ]
 
 /**
- * 洛书版：在平衡版基础上加入刘谌、界华雄、关羽、魏延，小乔改用洛书版天香
+ * 洛书版武将池：按定位分类展示，共 147 名。
  */
-const LUOSHU_UPGRADES: Record<string, string> = {
-    xiaoqiao: 'xiaoqiao_luoshu',
-    zhugeliang: 'zhugeliang_jie',
-    sunjian: 'sunjian_jie',
-    sunce: 'sunce_jie',
-    guojia: 'guojia_jie',
-    huanggai: 'huanggai_jie',
-    zhangliao: 'zhangliao_jie',
-    zhenji: 'zhenji_jie',
-    xuhuang: 'xuhuang_jie',
-    huangyueying: 'huangyueying_jie',
-    huatuo: 'huatuo_jie',
-    diaochan: 'diaochan_jie',
-    pangde: 'pangde_jie',
-    jiaxu: 'jiaxu_jie',
-    chengong: 'chengong_jie',
-    // 洛书版扩展（三）：界将升级
-    sunshangxiang: 'sunshangxiang_jie',
-    daqiao: 'daqiao_jie',
-    caifuren: 'caifuren_jie',
-    wangyi: 'wangyi_jie',
-    zhangfei: 'zhangfei_jie',
-    chengpu: 'chengpu_jie',
-    caoxiu: 'caoxiu_jie',
-    taishici: 'taishici_jie',
-}
-
-export const LUOSHU_POOL_IDS: string[] = CUSTOM_POOL_IDS
-    .map((id) => LUOSHU_UPGRADES[id] ?? id)
-    .concat([
-        'liuchen', 'huaxiong_jie', 'guanyu', 'weiyan',
-        'luji', 'haozhao', 'xuyou', 'handang', 'fazheng', 'masu', 'zhongyao', 'chengpu_jie',
-        'cenhun', 'sundeng', 'guotu', 'caoxiu_jie', 'xiahoushi', 'gongsunyuan',
-        'quancong',
-        // 洛书版扩展（二）
-        'xiahouyuan_jie', 'caoren', 'guanyinping', 'chenqun', 'xunyu', 'zhurong_jie',
-        'liushan', 'zhangzhaozhanghong_jie', 'dongzhuo', 'pangtong', 'yanliangwenchou_jie',
-        'wolong', 'taishici_jie', 'zhoufei', 'lusu', 'bulianshi_jie', 'kuailiangkuaiyue',
-        'gaoshun_jie', 'zhoufang',
-        // 洛书版扩展（四）：新增武将
-        'guohuai_jie', 'sunxiu', 'zhuhuan', 'huangzhong_jie', 'zhuzhi', 'zhugezhan',
-        'zhangxiu', 'liru', 'lisu', 'xujing', 'quyi',
-        // 洛书版扩展（五）：新增武将
-        'zhonghui_jie', 'zhangchunhua_jie', 'caozhang_jie', 'zhangsong_jie', 'fuhuanghou_jie',
-        'zhuran_jie', 'caochong_jie', 'mizhu', 'caorui', 'liufeng', 'zhanghe',
-        // 洛书版扩展（六）
-        'guanqiujian',
-        // 洛书版扩展（七）
-        'hanhaosihuan', 'shenzhaoyun', 'shanzhaoyun', 'caoang', 'qinmi', 'kanze',
-        // 洛书版扩展（八）
-        'zhanghulelin',
-        // 洛书版扩展（九）
-        'chenlin', 'hetaihou', 'sunluyu', 'shamoke', 'caochun', 'caiwenji_sp',
-        'shenlusu', 'sunchen', 'peixiu', 'panjun', 'lingju', 'baoxin',
-        'chengyu', 'xizhicai', 'liuxie', 'lifeng',
-    ])
+export const LUOSHU_POOL_IDS: string[] = [
+    // 辅助（23）
+    'liubei_jie', 'guojia_jie', 'caorui', 'lusu', 'xiahoudun_jing', 'luxun_jie',
+    'zhangsong_jie', 'zhongyao', 'chenqun', 'xunyu', 'xujing', 'liushan',
+    'chengong_jie', 'xiaoqiao', 'zhoufei', 'xiahoushi', 'sunshangxiang_sp', 'guyong',
+    'kanze', 'shenlusu', 'baoxin', 'xizhicai', 'liuxie',
+    // 牌差（29）
+    'lidian_jie', 'wangji', 'sunquan', 'lingtong', 'huangyueying_jie', 'wangping',
+    'zhenji_jie', 'huangquan_jing', 'sunjian_jie', 'zhouyu_jie', 'sunqian', 'zumao',
+    'jushou', 'handang', 'fazheng', 'sundeng', 'guotu', 'quancong',
+    'zhangzhaozhanghong_jie', 'bulianshi_jie', 'kuailiangkuaiyue', 'zhoufang', 'guohuai_jie', 'sunxiu',
+    'zhuzhi', 'zhuran_jie', 'guanqiujian', 'chenlin', 'lifeng', 'xuezong',
+    // 菜刀（22）
+    'xuchu_jie', 'zhangfei_jie', 'machao_jie', 'litong', 'zhoucang', 'madai',
+    'dingfeng', 'lingcao', 'lvbu_jing', 'pangde_jie', 'fuwan', 'guanyu',
+    'weiyan', 'caoxiu_jie', 'xiahouyuan_jie', 'zhurong_jie', 'taishici_jie', 'gaoshun_jie',
+    'lisu', 'caozhang_jie', 'shamoke', 'caochun',
+    // 直伤（23）
+    'dianwei_jie', 'huanggai_jie', 'yuejin', 'zhugeke', 'zhangjiao', 'jiaxu_jie',
+    'diaochan_jie', 'caifuren_jie', 'liuchen', 'huaxiong_jie', 'cenhun', 'guanyinping',
+    'pangtong', 'yanliangwenchou_jie', 'yufan', 'zhuhuan', 'huangzhong_jie', 'zhangxiu',
+    'liru', 'quyi', 'hetaihou', 'sunchen', 'lingju',
+    // 控制（27）
+    'daqiao_jie', 'fuhuanghou_jie', 'xuhuang_jie', 'hanhaosihuan', 'ganning_jie', 'wenpin',
+    'zhugeliang_jie', 'xuyou', 'zhugezhan', 'gongsunyuan', 'masu', 'zhanghulelin',
+    'zhangliao_jie', 'liufeng', 'zhanghe', 'wolong', 'caoren', 'caoren_sp',
+    'dongyun', 'zhugejin', 'simayi_jie', 'xunyou', 'jiangwei', 'haozhao',
+    'sunluyu', 'peixiu', 'chengyu',
+    // 肉盾（13）
+    'qinmi', 'caoang', 'dengai', 'wangyi_jie', 'caocao_jie', 'yanyan',
+    'sunce_jie', 'luji', 'dongzhuo', 'zhonghui_jie', 'zhangchunhua_jie', 'caochong_jie',
+    'panjun',
+    // 回复（9）
+    'zhaoyun_jing', 'shenzhaoyun', 'shanzhaoyun', 'huatuo_jie', 'sunshangxiang_jie', 'chengpu_jie',
+    'mizhu', 'simalang', 'caiwenji_sp',
+]
 
 /** 统率三军 2013 版武将池（原始 32 人） */
 export const CLASSIC_POOL_IDS: string[] = [
     // 魏 (9)
     'caocao', 'simayi', 'zhangliao', 'guojia', 'zhenji', 'xiahoyuan', 'xuhuang', 'xiahoudun', 'wenpin',
     // 蜀 (8)
-    'liubei', 'guanyu', 'zhangfei', 'zhugeliang', 'zhaoyun', 'machao', 'huangyueying', 'jiangwei',
+    'liubei', 'guanyu', 'zhangfei', 'zhugeliang', 'zhaoyun_jing', 'machao', 'huangyueying', 'jiangwei',
     // 吴 (10)
     'sunquan', 'ganning', 'huanggai', 'zhouyu', 'daqiao', 'sunshangxiang', 'sunjian', 'xiaoqiao', 'sunce',
     'zhugejin',

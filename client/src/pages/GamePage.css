@@ -219,6 +219,19 @@
     animation: judgePulseBing 1.8s ease-in-out infinite;
 }
 
+.judge-lei {
+    background: linear-gradient(180deg, rgba(170, 130, 255, 0.55), rgba(80, 40, 170, 0.55));
+    border: 1px solid #a882ff;
+    color: #efe6ff;
+    box-shadow: 0 0 10px rgba(150, 110, 255, 0.85);
+    animation: judgePulseLei 1.8s ease-in-out infinite;
+}
+
+@keyframes judgePulseLei {
+    0%, 100% { box-shadow: 0 0 6px rgba(150, 110, 255, 0.6); }
+    50%      { box-shadow: 0 0 16px rgba(190, 160, 255, 1); }
+}
+
 @keyframes judgePulseLe {
     0%, 100% { box-shadow: 0 0 6px rgba(255, 160, 40, 0.6); }
     50%      { box-shadow: 0 0 16px rgba(255, 190, 90, 1); }
@@ -514,6 +527,26 @@
     font-size: 12px;
     color: var(--color-text-muted);
     padding: 2px 6px;
+}
+
+/* 复盘：点任意一条日志即可复制它的唯一 ID */
+.log-entry-clickable {
+    cursor: pointer;
+}
+
+.log-entry-clickable:hover {
+    background: rgba(212, 160, 48, 0.12);
+    color: var(--color-gold-light);
+}
+
+.review-notice {
+    padding: 5px 10px;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    color: #e8c05a;
+    background: rgba(212, 160, 48, 0.12);
+    border-bottom: 1px solid rgba(212, 160, 48, 0.25);
+    word-break: break-all;
 }
 
 .log-expand-btn {
@@ -2299,40 +2332,6 @@
 
 .view-name {
     font-size: 14px;
-}
-
-/* ── 本地模型思考中：行动武将卡上的“……” ── */
-.general-thinking {
-    position: absolute;
-    left: 50%;
-    bottom: 6px;
-    transform: translateX(-50%);
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 2px 7px;
-    border-radius: 999px;
-    background: rgba(8, 20, 30, 0.86);
-    border: 1px solid rgba(127, 212, 255, 0.55);
-    box-shadow: 0 0 10px rgba(127, 212, 255, 0.35);
-    z-index: 8;
-    pointer-events: none;
-}
-
-.general-thinking .think-dot {
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: #7fd4ff;
-    animation: generalThinkingBlink 1.05s ease-in-out infinite;
-}
-
-.general-thinking .think-dot:nth-child(2) { animation-delay: 0.16s; }
-.general-thinking .think-dot:nth-child(3) { animation-delay: 0.32s; }
-
-@keyframes generalThinkingBlink {
-    0%, 100% { opacity: 0.2; transform: translateY(0); }
-    50%      { opacity: 1; transform: translateY(-2px); }
 }
 
 /* 窄屏：左右栏跟着收，避免挤压牌桌 */

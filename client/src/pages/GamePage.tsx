@@ -16,11 +16,14 @@ import {
     GameStateClientView,
     EquipmentCardName,
     SkillType,
+    LogEntry,
 } from 'sgs3v3-shared'
-import { emit } from '../socket/client'
+import { emit } from '../actions'
 import { GENERAL_IMAGE } from '../data/generalImages'
 import { useTooltip, generalTooltipById, cardTooltipContent, TooltipBubble } from '../components/Tooltip'
 import { getAttackRange } from '../engine/game-state'
+import { logReviewId } from '../engine/match-log'
+import { clearReviewQueue, copyText, getReviewQueue, pushReviewId } from '../engine/review'
 import { cardNameOf } from '../engine/card-utils'
 import { CARD_TOOLTIP } from '../data/tooltipData'
 import { GENERALS, getGeneralById, getSkillDefById } from '../engine/generals'
@@ -31,13 +34,13 @@ import './GamePagePair.css'
 
 const GENERAL_NAMES: Record<string, string> = {
     // 蜀
-    liubei: '刘备', guanyu: '关羽', zhangfei: '张飞',
-    zhugeliang: '诸葛亮', zhaoyun: '赵云', huangyueying: '界黄月英',
+    liubei: '刘备', liubei_jie: '界刘备', guanyu: '关羽', zhangfei: '张飞',
+    zhugeliang: '诸葛亮', zhaoyun_jing: '赵云-竞', huangyueying: '界黄月英',
     machao: '马超', jiangwei: '姜维',
     // 魏
     caocao: '曹操', simayi: '司马懿', xiahoudun: '夏侯惇',
     zhangliao: '界张辽', guojia: '郭嘉', zhenji: '界甄姬',
-    xiahoyuan: '夏侯渊', xuhuang: '界徐晃', wenpin: '文聘',
+    xiahoyuan: '夏侯渊', xuhuang: '徐晃', xuhuang_jie: '界徐晃', wenpin: '文聘',
     // 吴
     sunquan: '孙权', ganning: '甘宁', huanggai: '黄盖',
     zhouyu: '周瑜', daqiao: '大乔', sunshangxiang: '孙尚香',
@@ -59,7 +62,7 @@ const GENERAL_NAMES: Record<string, string> = {
     lingcao: '凌操', caifuren: '蔡夫人', lvbu_jing: '吕布-竞',
     xiahoudun_jing: '夏侯惇-竞',
     // 洛书版
-    liuchen: '刘谌', huaxiong_jie: '界华雄', weiyan: '魏延', xiaoqiao_luoshu: '小乔',
+    liuchen: '刘谌', huaxiong_jie: '界华雄', weiyan: '魏延',
     luji: '陆绩', haozhao: '郝昭', xuyou: '许攸', handang: '韩当', fazheng: '法正',
     masu: '马谡', zhongyao: '钟繇', chengpu: '程普', cenhun: '岑昏', sundeng: '孙登',
     guotu: '郭图逢纪', caoxiu: '曹休', guohuanghou: '郭皇后', xiahoushi: '夏侯氏',
@@ -67,7 +70,7 @@ const GENERAL_NAMES: Record<string, string> = {
     // 洛书版扩展（五）
     zhonghui_jie: '界钟会', zhangchunhua_jie: '界张春华', caozhang_jie: '界曹彰',
     zhangsong_jie: '界张松', fuhuanghou_jie: '界伏皇后', zhuran_jie: '界朱然',
-    caochong_jie: '界曹冲', mizhu: '糜竺', caorui: '曹叡', liufeng: '刘封', zhanghe: '张郃',
+    caochong_jie: '界曹冲', mizhu: '糜竺', caorui: '曹叡', liufeng: '刘封', zhanghe: '张郃', xuezong: '薛综',
 }
 
 // 未手写过的武将（含各批扩展）统一取定义里的名字，避免面板上直接显示 id
@@ -139,6 +142,7 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
         diaochan: [{ id: 'diaochan_lijian', name: '离间', desc: '限一次：弃1牌，令两名男性决斗' }],
         zhouyu: [{ id: 'zhouyu_fanjian', name: '反间', desc: '限一次：目标选花色→获你一牌→不同受1伤' }],
         liubei: [{ id: 'liubei_rende', name: '仁德', desc: '将手牌给其他角色，每给2张回1血' }],
+        liubei_jie: [{ id: 'liubei_rende', name: '仁德', desc: '将手牌给其他角色，每给2张回1血' }],
         guanyu: [
             { id: 'guanyu_wusheng', name: '武圣', desc: '红色手牌当杀使用（切换模式）' },
             { id: 'guanyu_zhongyi', name: '忠义', desc: '限定：置红牌，己方杀+1伤' },
@@ -210,6 +214,7 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
             id: 'sunshangxiang_jieyuan', name: '结姻',
             desc: '限一次：选一名男性角色，弃一张手牌或将一张装备牌置入其装备区；体力高者摸一张，体力低者回复1点',
         }],
+        xuezong: [{ id: 'xuezong_jiexun', name: '诫训', desc: '结束阶段：令一名其他角色摸场上♦牌数张，再弃此前发动次数张' }],
         daqiao_jie: [
             { id: 'daqiao_jie_guose', name: '国色', desc: '限一次：♦牌当【乐不思蜀】使用，然后摸一张' },
             {
@@ -287,7 +292,7 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
         }],
         shenlusu: [{
             id: 'shenlusu_tamo', name: '榻谟',
-            desc: '限定技：重新分配所有角色的座次（换位不影响行动顺序），然后失去X点体力',
+            desc: '限定技：失去1点体力，然后重新排列所有角色的座次（不影响行动顺序）',
         }, {
             id: 'shenlusu_dingzhou', name: '定州',
             desc: '限一次：交给一名场上有牌的其他角色X张牌（X为其场上牌数），然后获得其场上的所有牌',
@@ -350,7 +355,7 @@ function HpGems({ hp, maxHp }: { hp: number; maxHp: number }) {
 }
 
 function GeneralPanel({
-    general, index, isActive, isTarget, onSelect, isViewing, fx, thinking, showSeatRole = true,
+    general, index, isActive, isTarget, onSelect, isViewing, fx, showSeatRole = true,
     onTooltipEnter, onTooltipMove, onTooltipLeave, onEquipTooltip,
 }: {
     general: GeneralClientView
@@ -360,8 +365,6 @@ function GeneralPanel({
     onSelect?: (i: number) => void
     isViewing?: boolean
     fx?: 'hit' | 'pointer' | 'cast' | null
-    /** 本地模型正在为这名武将思考 */
-    thinking?: boolean
     /** 是否显示主帅/前锋标记（欢乐成双没有这两种身份） */
     showSeatRole?: boolean
     onTooltipEnter?: (e: React.MouseEvent) => void
@@ -519,12 +522,16 @@ function GeneralPanel({
                 {general.judgeZone && general.judgeZone.length > 0 && (
                     <div className="general-judge-zone">
                         {general.judgeZone.map((card) => {
-                            const isLe = card.name === 'overindulgence'
+                            const meta = card.name === 'overindulgence'
+                                ? { cls: 'judge-le', icon: '乐', label: '乐不思蜀' }
+                                : card.name === 'lightning'
+                                    ? { cls: 'judge-lei', icon: '雷', label: '闪电' }
+                                    : { cls: 'judge-bing', icon: '兵', label: '兵粮寸断' }
                             return (
                                 <div key={card.id}
-                                    className={`judge-item ${isLe ? 'judge-le' : 'judge-bing'}`}
-                                    title={`${isLe ? '乐不思蜀' : '兵粮寸断'} ${getSuitSymbol(card.suit)}${getValueStr(card.value)}`}>
-                                    <span className="judge-icon">{isLe ? '乐' : '兵'}</span>
+                                    className={`judge-item ${meta.cls}`}
+                                    title={`${meta.label} ${getSuitSymbol(card.suit)}${getValueStr(card.value)}`}>
+                                    <span className="judge-icon">{meta.icon}</span>
                                     <span className="judge-meta">{getSuitSymbol(card.suit)}{getValueStr(card.value)}</span>
                                 </div>
                             )
@@ -534,13 +541,6 @@ function GeneralPanel({
             </div>
             {!general.alive && <div className="general-dead-overlay">阵亡</div>}
             {general.alive && general.hasActed && <div className="general-acted-badge">已行动</div>}
-            {thinking && general.alive && (
-                <div className="general-thinking" title="本地模型正在思考">
-                    <span className="think-dot" />
-                    <span className="think-dot" />
-                    <span className="think-dot" />
-                </div>
-            )}
         </div>
     )
 }
@@ -605,7 +605,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
         gameState: storeGameState, myFaction: storeFaction, isSpectator,
         selectedCardIds, selectedTargets,
         toggleCardSelection, toggleTargetSelection, clearSelection,
-        error, setError, llmThinking,
+        error, setError,
     } = useGameStore()
     const gameState = view ?? storeGameState
     const myFaction = faction ?? storeFaction
@@ -629,6 +629,47 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
     const [handOrder, setHandOrder] = useState<string[]>([])
     // 日志面板默认只渲染最近若干条，超长对局里前面的日志可手动展开
     const [showAllLog, setShowAllLog] = useState(false)
+
+    // 复盘：点日志复制 ID，并攒成本机清单，之后一次性粘给分析脚本
+    const [reviewNotice, setReviewNotice] = useState('')
+    const [reviewCount, setReviewCount] = useState(() => getReviewQueue().length)
+    const reviewNoticeTimer = useRef<number | null>(null)
+    useEffect(() => () => {
+        if (reviewNoticeTimer.current !== null) window.clearTimeout(reviewNoticeTimer.current)
+    }, [])
+
+    function notifyReview(text: string) {
+        setReviewNotice(text)
+        if (reviewNoticeTimer.current !== null) window.clearTimeout(reviewNoticeTimer.current)
+        reviewNoticeTimer.current = window.setTimeout(() => setReviewNotice(''), 2800)
+    }
+
+    async function handleLogClick(entry: LogEntry) {
+        const id = logReviewId(entry)
+        if (!id) {
+            notifyReview('这条日志没有复盘 ID（在线对局不落在本机记录）')
+            return
+        }
+        setReviewCount(pushReviewId(id).length)
+        notifyReview(await copyText(id) ? `已复制 ${id}` : `剪贴板不可用，请手动记录 ${id}`)
+    }
+
+    async function handleCopyReviewQueue() {
+        const ids = getReviewQueue().map((m) => m.id)
+        if (ids.length === 0) {
+            notifyReview('复盘清单为空：点击任意日志即可收集')
+            return
+        }
+        notifyReview(await copyText(ids.join('\n')) ? `已复制 ${ids.length} 条复盘 ID` : '剪贴板不可用')
+    }
+
+    function handleClearReviewQueue() {
+        if (getReviewQueue().length === 0) return
+        if (!window.confirm('清空复盘清单？（不影响已导出的对局日志）')) return
+        clearReviewQueue()
+        setReviewCount(0)
+        notifyReview('复盘清单已清空')
+    }
 
     // 非法操作提示：对局中直接显示，几秒后自动消失
     useEffect(() => {
@@ -1243,7 +1284,6 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                             isActive={idx === activeGeneralIndex}
                             isTarget={selectedTargets.includes(idx)}
                             showSeatRole={!isPair}
-                            thinking={idx === activeGeneralIndex && !!llmThinking}
                             fx={fx ? (fx.target === idx ? fx.kind : (fx.from === idx ? 'cast' : null)) : null}
                             onSelect={isSingleSelectSkill
                                 ? (i) => { if (handlePendingTargetPick(i)) return; if (canTargetWithSelectedCard(i)) useGameStore.setState({ selectedTargets: [i] }) }
@@ -1524,7 +1564,6 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                             isActive={idx === activeGeneralIndex}
                             isTarget={selectedTargets.includes(idx)}
                             showSeatRole={!isPair}
-                            thinking={idx === activeGeneralIndex && !!llmThinking}
                             fx={fx ? (fx.target === idx ? fx.kind : (fx.from === idx ? 'cast' : null)) : null}
                             onSelect={(needTargetPick)
                                 ? (i) => {
@@ -1727,7 +1766,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     if (pendingResponse.type === ResponseType.PEACH_SAVE_ASK) {
                                         // 急救(红色牌) + 救主(任意牌)
                                         const responder = gameState.generals[pendingResponse.targetGeneralIndex]
-                                        const hasJiuzhu = responder?.generalId === 'zhaoyun'
+                                        const hasJiuzhu = responder?.generalId === 'zhaoyun_jing'
                                         const hasJijiu = responder?.generalId === 'huatuo'
                                         if (hasJiuzhu) {
                                             filter = () => true // 救主可以弃任意牌
@@ -1899,12 +1938,13 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                         const dying = typeof dyingIdx === 'number' ? generals[dyingIdx] : null
                         const cardCount = (responder?.hand?.length ?? 0)
                             + Object.values(responder?.equip ?? {}).filter(Boolean).length
-                        const canJiuzhu = !!responder && responder.generalId === 'zhaoyun'
+                        const canJiuzhu = !!responder && responder.generalId === 'zhaoyun_jing'
                             && responder !== dying
                             && responder.hp > 1
                             && cardCount > 0
                             && responder.faction === dying?.faction
-                        const canJijiu = responder?.generalId === 'huatuo'
+                        const canJijiu = !!responder
+                            && (getGeneralById(responder.generalId)?.skills.some(s => s.id === 'huatuo_jijiu') ?? false)
                         const chunCount = responder?.generalPile?.length ?? 0
                         // 界程普：移去 X 张（X 为本轮以此法使用【酒】的次数），原版固定 1 张
                         const chunCost = Math.max(1, responder?.chunlaoCost ?? 0)
@@ -1963,12 +2003,20 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                             </span>
                             {((pendingResponse.context as any)?.options as { action: string; label: string }[] | undefined)?.length ? (
                                 <>
+                                    {activationCardSelect && (
+                                        <span className="skill-confirm-label">
+                                            先点选要交出的手牌（数量与所选项相同，已选 {selectedCardIds.length} 张）
+                                        </span>
+                                    )}
                                     {((pendingResponse.context as any).options as { action: string; label: string }[])
                                         .map((opt) => (
                                             <button key={opt.action} className="btn btn-skill"
                                                 onClick={() => handleRespond(undefined, {
                                                     action: opt.action,
                                                     generalIndex: pendingResponse.targetGeneralIndex,
+                                                    ...(activationCardSelect && selectedCardIds.length > 0
+                                                        ? { cardIds: selectedCardIds }
+                                                        : {}),
                                                 })}>
                                                 {opt.label}
                                             </button>
@@ -2054,17 +2102,27 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     <button className="btn"
                                         onClick={() => handleRespond(undefined, { action: 'decline' })}>放弃</button>
                                 </>
-                            ) : ((pendingResponse.context as any)?.skillId === 'xiaoqiao_tianxiang'
-                                || (pendingResponse.context as any)?.skillId === 'xiaoqiao_tianxiang_luoshu') ? (
-                                <>
-                                    <button className="btn btn-skill" disabled={selectedCardIds.length === 0}
-                                        onClick={() => handleRespond(selectedCardIds[0], { action: 'confirm' })}>
-                                        选♥牌发动天香
-                                    </button>
-                                    <button className="btn"
-                                        onClick={() => handleRespond(undefined, { action: 'decline' })}>放弃</button>
-                                </>
-                            ) : (pendingResponse.context as any)?.skillId === 'chengong_mingce' ? (() => {
+                            ) : (pendingResponse.context as any)?.skillId === 'xiaoqiao_tianxiang_luoshu' ? (() => {
+                                // 天香：点选♥手牌，并可同时点选伤害转移目标
+                                const selfIdx = pendingResponse.targetGeneralIndex
+                                const txTargets = selectedTargets.filter(i => i !== selfIdx)
+                                return (
+                                    <>
+                                        <span className="skill-confirm-label">
+                                            点选一张♥手牌，可同时点选伤害转移目标（已选 {txTargets.length}/1）
+                                        </span>
+                                        <button className="btn btn-skill" disabled={selectedCardIds.length === 0}
+                                            onClick={() => handleRespond(selectedCardIds[0], {
+                                                action: 'confirm',
+                                                ...(txTargets.length > 0 ? { targetIndices: txTargets.slice(0, 1) } : {}),
+                                            } as any)}>
+                                            选♥牌发动天香
+                                        </button>
+                                        <button className="btn"
+                                            onClick={() => handleRespond(undefined, { action: 'decline' })}>放弃</button>
+                                    </>
+                                )
+                            })() : (pendingResponse.context as any)?.skillId === 'chengong_mingce' ? (() => {
                                 const mingceCtx = pendingResponse.context as any
                                 const slashTargetIdx = mingceCtx.mingceSlashTargetIndex
                                 const slashTarget = typeof slashTargetIdx === 'number' && slashTargetIdx >= 0
@@ -2560,9 +2618,20 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                         const need = Math.max(1, pctx?.count ?? 1)
                         const minNeed = Math.max(1, Math.min(need, Number(pctx?.minCount ?? 1)))
                         const candidates: string[] = pctx?.candidateCardIds ?? []
-                        const picked = candidates.length > 0
-                            ? selectedCardIds.filter((id: string) => candidates.includes(id))
-                            : selectedCardIds
+                        const picker = gameState.generals[pendingResponse.targetGeneralIndex]
+                        const equipSlots = ['weapon', 'armor', 'plus_horse', 'minus_horse'] as const
+                        const equipChoices = pctx?.allowEquip
+                            ? equipSlots.map(slot => ({ slot, card: picker?.equip?.[slot] })).filter(e => !!e.card)
+                            : []
+                        const equipPickedIds = equipChoices
+                            .filter(e => selectedEquipSlots.includes(e.slot))
+                            .map(e => e.card!.id)
+                        const picked = [
+                            ...(candidates.length > 0
+                                ? selectedCardIds.filter((id: string) => candidates.includes(id))
+                                : selectedCardIds),
+                            ...equipPickedIds,
+                        ]
                         const countOk = pctx?.exactCount
                             ? picked.length === need
                             : picked.length >= minNeed && picked.length <= need
@@ -2574,10 +2643,21 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                         ? `（${pctx?.exactCount ? `需选 ${need} 张` : `至少 ${minNeed} 张，至多 ${need} 张`}，已选 ${picked.length}）`
                                         : (need > 1
                                             ? `（至多 ${need} 张，已选 ${picked.length}）`
-                                            : (candidates.length > 0 ? '（点击手牌后确认）' : '（点击手牌或装备后确认）'))}
+                                            : (candidates.length > 0 && !pctx?.allowEquip ? '（点击手牌后确认）' : '（点击手牌或装备后确认）'))}
                                 </span>
+                                {equipChoices.map(({ slot, card }) => (
+                                    <button key={slot}
+                                        className={`btn ${selectedEquipSlots.includes(slot) ? 'btn-skill' : 'btn-secondary'}`}
+                                        onClick={() => setSelectedEquipSlots(prev =>
+                                            prev.includes(slot) ? prev.filter(s => s !== slot) : [...prev, slot])}>
+                                        装备：{cardNameOf(card!.name)}
+                                    </button>
+                                ))}
                                 <button className="btn btn-skill" disabled={!countOk}
-                                    onClick={() => handleRespond(undefined, { cardIds: picked.slice(0, need) } as any)}>确认</button>
+                                    onClick={() => {
+                                        handleRespond(undefined, { cardIds: picked.slice(0, need) } as any)
+                                        setSelectedEquipSlots([])
+                                    }}>确认</button>
                                 <button className="btn"
                                     onClick={() => handleRespond(undefined, { action: 'decline' } as any)}>放弃</button>
                             </>
@@ -3114,7 +3194,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     {pickTarget?.judgeZone && pickTarget.judgeZone.length > 0 && pickTarget.judgeZone.map((jc: any) => (
                                         <button key={jc.id} className="btn btn-secondary"
                                             onClick={() => emit.respond({ action: 'judge', cardId: jc.id } as any)}>
-                                            判定区：{jc.name === 'overindulgence' ? '乐不思蜀' : '兵粮寸断'}
+                                            判定区：{jc.name === 'overindulgence' ? '乐不思蜀' : jc.name === 'lightning' ? '闪电' : '兵粮寸断'}
                                         </button>
                                     ))}
                                 </div>
@@ -3333,12 +3413,6 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
             <div className="game-log-sidebar-header">
                 <span>{isSpectator ? '👁 观战中' : '游戏日志'}</span>
                 <div style={{ display: 'flex', gap: 6 }}>
-                    {isSpectator && (
-                        <button className="btn-surrender" style={{ background: 'rgba(50,150,220,0.25)', color: '#5af', borderColor: 'rgba(50,150,220,0.5)' }}
-                            onClick={() => emit.switchSpectateFaction()}>
-                            切换视角
-                        </button>
-                    )}
                     {!isSpectator && (
                         <button className="btn-surrender" title="调整 AI 出牌的播放速度"
                             onClick={() => {
@@ -3349,6 +3423,10 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                             节奏：{pace === 0 ? '瞬时' : pace <= 120 ? '快速' : '正常'}
                         </button>
                     )}
+                    <button className="btn-surrender" title="点击日志复制复盘 ID；Shift+点击清空清单"
+                        onClick={(ev) => { if (ev.shiftKey) handleClearReviewQueue(); else void handleCopyReviewQueue() }}>
+                        复盘 {reviewCount}
+                    </button>
                     {!isSpectator && (
                         <button className="btn-surrender" onClick={() => {
                             if (window.confirm('确定要新开一局吗？')) {
@@ -3359,9 +3437,14 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                     )}
                 </div>
             </div>
+            {reviewNotice && <div className="review-notice">{reviewNotice}</div>}
             <div className="action-log">
                 {[...visibleLog].reverse().map((entry, i) => (
-                    <div key={i} className="log-entry">{highlightLogText(entry.text)}</div>
+                    <div key={i} className="log-entry log-entry-clickable"
+                        title={logReviewId(entry) ?? '这条日志没有本机复盘 ID'}
+                        onClick={() => void handleLogClick(entry)}>
+                        {highlightLogText(entry.text)}
+                    </div>
                 ))}
                 {log.length > LOG_RECENT_LIMIT && (
                     <button className="btn btn-secondary log-expand-btn" onClick={() => setShowAllLog(v => !v)}>

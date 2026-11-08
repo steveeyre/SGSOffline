@@ -7,7 +7,7 @@ import {
 } from 'sgs3v3-shared'
 import { getGeneralById } from './generals'
 import { DECK_SIZE, KEY_CARD_COUNTS } from './deck-meta'
-import { guessHand, knownNegates, poolView } from './ai-memory'
+import { guessHand, teamResource } from './ai-memory'
 import { slashDamageBonus } from './general-playbook'
 
 export type GeneralView = GameState['generals'][number]
@@ -139,18 +139,11 @@ export function delayedSuccessChance(state: GameState, target: GeneralView): num
 }
 
 /**
- * 敌方还有【无懈可击】的概率（按已打出的无懈与手牌数估计）。
+ * 敌方全队还有【无懈可击】的概率。
+ * 无懈可由任一存活队友打出，按团队资源合并；单看某个人会系统性低估。
  */
 export function negateRisk(state: GameState, playerId: string): number {
-    const faction = state.players[playerId]?.faction
-    const enemies = state.generals.filter((g) => g.alive && g.faction !== faction)
-    if (enemies.length === 0) return 0
-    // 明牌里已经看到无懈，就不必再估了
-    if (knownNegates(state, playerId) > 0) return 1
-    // 已打出的无懈在弃牌堆里，poolView 已经把它从剩余张数里扣掉
-    const remaining = poolView(state, playerId).left('negate')
-    const hands = enemies.reduce((sum, g) => sum + g.hand.length, 0)
-    return Math.min(1, atLeastOne(remaining / DECK_SIZE, hands))
+    return teamResource(state, playerId, 'negate').atLeastOne
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -173,7 +166,7 @@ export interface DodgeHoldValue {
     reason: string
 }
 
-/** 一次【杀】命中时，除掉血外还会带走的牌数 */
+/** 一次【杀】命中时，除掉血外还会带走的牌数（含技能带来的期望牌差） */
 function slashExtraLoss(attacker: GeneralView | undefined, target: GeneralView): number {
     if (!attacker) return 0
     const weapon = attacker.equip.weapon?.name
@@ -185,6 +178,8 @@ function slashExtraLoss(attacker: GeneralView | undefined, target: GeneralView):
     if (weapon === EquipmentCardName.KYLIN_BOW) {
         return (target.equip.plus_horse ? 1 : 0) + (target.equip.minus_horse ? 1 : 0)
     }
+    // 烈刃（祝融/界祝融）：命中后拼点，赢则获得目标一张牌；按均势拼点估 0.5 张
+    if (hasSkill(attacker, 'zhurong_lierend')) return 0.5
     return 0
 }
 
@@ -192,9 +187,9 @@ function slashExtraLoss(attacker: GeneralView | undefined, target: GeneralView):
  * 该不该留住【闪】、硬吃这一刀。
  *
  *  1. 这一刀自身已经很痛（酒杀/忠义/裸衣等加成），或命中附带额外牌差 ⇒ 必须闪。
- *  2. 这一刀只是普通 1 点，但对方还捏着【酒】或本回合还能再出【杀】，
- *     且我方体力够厚 ⇒ 留闪，把闪留给更痛的那一刀。
- *  3. 这一刀或下一刀直接致命 ⇒ 眼前这一刀必须处理，不能为了留闪送命。
+ *  2. 这一刀只是普通 1 点，但对方还捏着【酒】或本回合还能再出【杀】 ⇒ 留闪给更痛的那一刀。
+ *  3. 致命时不再只看体力：手里或队友有确定的桃/酒/急救/救主，可以硬吃当前刀、
+ *     濒死救回来后用闪挡下一刀。缺少救援资源时仍然必须闪。
  */
 export function dodgeHoldValue(
     state: GameState,
@@ -232,23 +227,53 @@ export function dodgeHoldValue(
         futureRisk = Math.min(1, futureRisk)
     }
 
+    // 濒死时能确定救回来的资源：己方手上的桃、自己的酒，以及急救/救主这类不耗桃的救援。
+    // 只统计确定性资源；未知手牌按密度赌救只会送命。
+    const rescueChance = ((): number => {
+        // 救援资源按“被打角色的阵营”统计；本地 AI 与真人观战的 playerId 不一定同阵营
+        const faction = target.faction
+        const allies = state.generals.filter((g) => g.alive && g.faction === faction)
+        const peach = allies.some((g) => g.hand.some((c) => c.name === BasicCardName.PEACH))
+        const wine = target.hand.some((c) => c.name === BasicCardName.WINE)
+        const jijiu = allies.some((g) => g !== target && hasSkill(g, 'huatuo_jijiu') &&
+            [...g.hand, ...Object.values(g.equip).filter((c): c is Card => !!c)]
+                .some((c) => c.suit === CardSuit.HEART || c.suit === CardSuit.DIAMOND))
+        const jiuzhu = allies.some((g) => g !== target && hasSkill(g, 'zhaoyun_jiuzhu') && g.hp > 1 &&
+            g.hand.length + Object.values(g.equip).filter(Boolean).length > 0)
+        return peach || wine || jijiu || jiuzhu ? 1 : 0
+    })()
+    const canTradeForFuture = rescueChance >= 0.8 && futureRisk >= 0.5 &&
+        futureDamage > currentDamage && !extraLoss
+
     const lethalNow = target.hp <= currentDamage
     const lethalFuture = target.hp <= futureDamage
 
     let hold = false
     let reason = ''
     if (lethalNow) {
-        reason = '这一刀直接致死，不能省闪'
+        if (canTradeForFuture) {
+            reason = `这一刀会打至濒死，但手里有救援；之后有 ${(futureRisk * 100).toFixed(0)}% 概率吃到 ` +
+                `${futureDamage} 点的一刀，先用桃/酒救回、把闪留给下一刀`
+            hold = true
+        } else {
+            reason = '这一刀直接致死，不能省闪'
+        }
     } else if (currentDamage >= 2 || extraLoss) {
         const bits: string[] = []
         if (currentDamage >= 2) bits.push(`${currentDamage} 点伤害（${current.reasons.join('+')}）`)
         if (extraLoss) bits.push(`附带 ${extraCards} 张牌差`)
         reason = `这一刀已很重：${bits.join('，')}，闪出去更划算`
     } else if (lethalFuture) {
-        reason = `之后那一刀 ${futureDamage} 点会直接致死，闪也挡不住，先把眼前扛过去`
-    } else if (futureRisk >= 0.5 && futureDamage >= 2 && target.hp >= 3) {
+        if (canTradeForFuture) {
+            reason = `之后那一刀 ${futureDamage} 点会致死，但当前只掉 ${currentDamage} 点且救得回来，` +
+                '留闪挡下一刀'
+            hold = true
+        } else {
+            reason = `之后那一刀 ${futureDamage} 点会直接致死，先把眼前扛过去`
+        }
+    } else if (canTradeForFuture) {
         reason = `留闪：之后有 ${(futureRisk * 100).toFixed(0)}% 概率吃到 ${futureDamage} 点的一刀，` +
-            '现在只掉 1 点还能扛'
+            `现在只掉 ${currentDamage} 点还能扛`
         hold = true
     } else {
         reason = '普通一刀，正常出闪'

@@ -1,0 +1,162 @@
+[
+  {
+    "id": "3v3-warm",
+    "mode": "3v3",
+    "seed": 1000,
+    "winner": "cool",
+    "steps": 228,
+    "draft": [
+      "huanggai",
+      "zhaoyun_jing",
+      "lvbu",
+      "daqiao",
+      "zhugejin",
+      "sunjian",
+      "diaochan",
+      "xiaoqiao",
+      "zhugeliang",
+      "simayi",
+      "zhenji",
+      "huangyueying",
+      "sunshangxiang",
+      "xuhuang",
+      "wenpin",
+      "xiahoyuan"
+    ],
+    "firstPlay": {
+      "key": "duel",
+      "objective": "limit-enemy-next",
+      "reason": "限制下回合威胁最高的敌人"
+    },
+    "mistakes": {
+      "missed-kill": 1,
+      "focus-drift": 0,
+      "landlord-passive": 0
+    }
+  },
+  {
+    "id": "3v3-cool",
+    "mode": "3v3",
+    "seed": 1001,
+    "winner": "cool",
+    "steps": 162,
+    "draft": [
+      "huatuo",
+      "machao",
+      "zhangliao",
+      "xiahoudun",
+      "sunshangxiang",
+      "zhouyu",
+      "caocao",
+      "xiaoqiao",
+      "huanggai",
+      "zhaoyun_jing",
+      "guanyu",
+      "sunquan",
+      "jiaxu",
+      "xuhuang",
+      "sunjian",
+      "xiahoyuan"
+    ],
+    "firstPlay": {
+      "key": "overindulgence",
+      "objective": "limit-enemy-next",
+      "reason": "限制下回合威胁最高的敌人"
+    },
+    "mistakes": {
+      "missed-kill": 0,
+      "focus-drift": 0,
+      "landlord-passive": 0
+    }
+  },
+  {
+    "id": "pair-warm",
+    "mode": "pair",
+    "seed": 7000,
+    "winner": "warm",
+    "steps": 331,
+    "draft": [
+      "chengpu_jie",
+      "dengai",
+      "caoxiu_jie",
+      "caorui"
+    ],
+    "firstPlay": {
+      "key": "supply_shortage",
+      "objective": "limit-enemy-next",
+      "reason": "限制下回合威胁最高的敌人"
+    },
+    "mistakes": {
+      "missed-kill": 0,
+      "focus-drift": 0,
+      "landlord-passive": 0
+    }
+  },
+  {
+    "id": "pair-cool",
+    "mode": "pair",
+    "seed": 7001,
+    "winner": "cool",
+    "steps": 169,
+    "draft": [
+      "chengpu_jie",
+      "zhangchunhua_jie",
+      "zhuzhi",
+      "caozhang_jie"
+    ],
+    "firstPlay": {
+      "key": "duel",
+      "objective": "limit-enemy-next",
+      "reason": "限制下回合威胁最高的敌人"
+    },
+    "mistakes": {
+      "missed-kill": 0,
+      "focus-drift": 0,
+      "landlord-passive": 0
+    }
+  },
+  {
+    "id": "ddz-landlord",
+    "mode": "ddz-landlord",
+    "seed": 8000,
+    "winner": "warm",
+    "steps": 174,
+    "draft": [
+      "cenhun",
+      "dingfeng",
+      "zhangfei_jie"
+    ],
+    "firstPlay": {
+      "key": "skill:doudizhu_qiangyi",
+      "objective": "limit-enemy-next",
+      "reason": "限制下回合威胁最高的敌人"
+    },
+    "mistakes": {
+      "missed-kill": 0,
+      "focus-drift": 0,
+      "landlord-passive": 1
+    }
+  },
+  {
+    "id": "ddz-farmers",
+    "mode": "ddz-farmers",
+    "seed": 8000,
+    "winner": "warm",
+    "steps": 180,
+    "draft": [
+      "xunyou",
+      "guanyu",
+      "xuhuang_jie"
+    ],
+    "firstPlay": {
+      "key": "skill:doudizhu_qiangyi",
+      "objective": "limit-enemy-next",
+      "reason": "限制下回合威胁最高的敌人"
+    },
+    "mistakes": {
+      "missed-kill": 0,
+      "focus-drift": 0,
+      "landlord-passive": 1
+    }
+  }
+]

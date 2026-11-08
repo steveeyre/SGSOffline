@@ -21,11 +21,11 @@ import {
     dealDamage, triggerQingzheng, triggerXiashu, triggerKuanshi, triggerLizhan,
     triggerShenduan, triggerYonglueQueue, triggerZhendanDraw, triggerJuejing,
     triggerJiangJieDiscard,
-    resolveYonglueAttack, checkTuntian, syncCardState,
+    resolveYonglueAttack, checkTuntian, markCardStateBaseline, syncCardState,
     triggerBifa, triggerBifaTurnStart, triggerZhendu, triggerQiluan, triggerMeibu,
     triggerMumu, triggerShanjia, triggerChenqing, triggerMoshi, triggerGuanwei,
     triggerYimou, triggerShefu, triggerTunchu, triggerShuliang, triggerXianfuChoose,
-    triggerXianfuDamage, triggerXianfuHeal, triggerLingjuFenxin, maybeZongxuan,
+    triggerXianfuDamage, triggerXianfuHeal, triggerLingjuFenxin, maybeZongxuan, triggerZhimeng,
 } from './game-actions'
 import { bumpLandlordRound, nextLandlordSeat } from '../modes/FightTheLandlord/landlord-turn'
 import { bumpPairRound, nextPairSeat } from '../modes/HappyPair/pair-turn'
@@ -2144,6 +2144,9 @@ export function handleDiscard(
         discarded.push(general.hand.splice(idx, 1)[0])
     }
     state.discard.push(...discarded)
+    // 弃牌已在下面显式判定屯田；先把基线推进到弃牌后的手牌，
+    // 避免回合切换后的界面刷新把同一批弃牌误判成回合外失去牌。
+    markCardStateBaseline(state, general)
     maybeChunlaoPickup(state, general, discarded)
     general.discardedHandThisPhase = (general.discardedHandThisPhase ?? 0) + discarded.length
 
@@ -2263,6 +2266,40 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
     }
     const lowestCards = (g: GeneralInstance, count: number): Card[] =>
         [...g.hand].sort((a, b) => handValue(a) - handValue(b)).slice(0, count)
+
+    // 诫训（薛综）：令一名其他角色摸场上♦牌数张，再弃此前发动次数张
+    if (hasSkillById(general, 'xuezong_jiexun')) {
+        const diamondCount = state.generals.reduce((sum, g) => {
+            const cards = [...g.hand, ...Object.values(g.equip).filter((c): c is Card => !!c), ...g.judgeZone]
+            return sum + cards.filter((c) => c.suit === CardSuit.DIAMOND).length
+        }, 0)
+        if (diamondCount > 0) {
+            const uses = general.jiexunUses ?? 0
+            const preferred = uses === 0 ? allies : enemies
+            const candidates = preferred.length > 0 ? preferred : aliveOthers
+            const cardCount = (g: GeneralInstance) => g.hand.length + Object.values(g.equip).filter(Boolean).length
+            const target = [...candidates].sort((a, b) => cardCount(b) - cardCount(a))[0]
+            if (target) {
+                const drawn = drawCards(state, diamondCount)
+                target.hand.push(...drawn)
+                const discarded = lowestCards(target, uses)
+                for (const card of discarded) {
+                    const idx = target.hand.findIndex((c) => c.id === card.id)
+                    if (idx >= 0) {
+                        target.hand.splice(idx, 1)
+                        state.discard.push(card)
+                    }
+                }
+                general.jiexunUses = uses + 1
+                addLog(state, `【${name}】发动【诫训】，令【${getGeneralName(target)}】摸 ${drawn.length} 张牌并弃置 ${discarded.length} 张牌`)
+                if (discarded.length > 0 && target.hand.length === 0) {
+                    general.lostSkills = [...(general.lostSkills ?? []), 'xuezong_jiexun']
+                    general.funanUpgraded = true
+                    addLog(state, `【${name}】的【诫训】弃光了【${getGeneralName(target)}】的牌，失去【诫训】并强化【复难】`)
+                }
+            }
+        }
+    }
 
     // ══ 洛书版扩展（二）结束阶段技能 ══
     // 据守（曹仁）：摸四张并翻面，然后弃置一张手牌（装备牌则改为使用）
@@ -3000,6 +3037,9 @@ export function finishTurn(state: GameState): void {
         // 明鉴（曹叡）：其下个回合的手牌上限与【杀】次数上限加成在本回合结束时失效
         general.mingjianBonus = false
         addLog(state, `【${getGeneralName(general)}】回合结束`)
+
+        // 智盟（神鲁肃）：回合结束后，可随机平分自己与一名手牌数受限的其他角色的所有手牌
+        triggerZhimeng(state, general)
 
         // 结束阶段技能还在等待响应（如秘计）：等响应处理完再推进
         if (state.pendingResponseQueue.length > 0) return

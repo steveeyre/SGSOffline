@@ -24,7 +24,7 @@
 - 版本号统一为 1.0.0
 - 仓库仅保留源码、文档与必要资源，排除 `node_modules`、构建产物、调试脚本与 AI 审计日志
 - 新增根级 `build:standalone`、`check` 脚本
-- `release/` 下的离线构建产物不纳入版本控制
+- 离线构建产物（仓库根目录的 `SGSOffline.html`）不纳入版本控制
 - 更新 README 与 `.gitignore`；BGM 不随仓库提供
 
 ### 依赖安全

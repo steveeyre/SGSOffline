@@ -36,13 +36,16 @@ export const GENERAL_ROLES: Record<string, GeneralRole[]> = {
     caocao_jie: ['tank', 'core'],
     dianwei_jie: ['damage'],
     xuhuang: ['control'],
+    xuhuang_jie: ['control'],
+    hanhaosihuan: ['control'],
     xiahoyuan: ['damage'],
     // 蜀
     liubei: ['support', 'core'],
+    liubei_jie: ['support', 'core'],
     guanyu: ['damage'],
     zhangfei: ['damage'],
     zhugeliang: ['control', 'support'],
-    zhaoyun: ['damage', 'tank'],
+    zhaoyun_jing: ['damage', 'tank'],
     huangyueying: ['damage', 'core'],
     machao: ['damage'],
     machao_jie: ['damage'],
@@ -168,6 +171,8 @@ export const GENERAL_ROLES: Record<string, GeneralRole[]> = {
     caorui: ['support', 'tank'],
     liufeng: ['control', 'damage'],
     zhanghe: ['control', 'core'],
+    // 洛书版扩展（六）
+    xuezong: ['control', 'support'],
 }
 
 export function rolesOf(generalId: string): GeneralRole[] {
@@ -190,6 +195,7 @@ const SYNERGY: Array<[string, string, number]> = [
     // 刘备【仁德】给牌
     ['liubei', 'zhangfei', 7], ['liubei', 'guanyu', 6], ['liubei', 'huatuo', 6],
     ['liubei', 'huanggai', 5], ['liubei', 'huangyueying', 6], ['liubei', 'luxun_jie', 5],
+    ['liubei', 'sunquan', 5],
     // 华佗【急救/青囊】保住卖血与低血武将
     ['huatuo', 'huanggai', 7], ['huatuo', 'huangyueying', 5], ['huatuo', 'sunshangxiang', 5],
     ['huatuo', 'xiahoudun', 5], ['huatuo', 'yanyan', 4],
@@ -216,13 +222,19 @@ for (const [a, b, w] of SYNERGY) {
     SYNERGY_MAP.set(`${b}|${a}`, w)
 }
 
+/** 界刘备与刘备共用同一套技能与配合；查询配合时归一到刘备。 */
+function synergyId(generalId: string): string {
+    return generalId === 'liubei_jie' ? 'liubei' : generalId
+}
+
 /** 两名武将之间的配合权重（无配合返回 0） */
 export function synergyWeight(a: string, b: string): number {
-    return SYNERGY_MAP.get(`${a}|${b}`) ?? 0
+    return SYNERGY_MAP.get(`${synergyId(a)}|${synergyId(b)}`) ?? 0
 }
 
 /** 某武将的搭档列表（调试与选将提示用） */
 export function partnersOf(generalId: string): string[] {
-    return SYNERGY.filter(([a, b]) => a === generalId || b === generalId)
-        .map(([a, b]) => (a === generalId ? b : a))
+    const id = synergyId(generalId)
+    return SYNERGY.filter(([a, b]) => a === id || b === id)
+        .map(([a, b]) => (a === id ? b : a))
 }

@@ -10,7 +10,6 @@ import {
     SeatRole, TrickCardName,
 } from 'sgs3v3-shared'
 import { DECK_SIZE, KEY_CARD_COUNTS } from './deck-meta'
-import { rolesOf } from './general-meta'
 
 export type GeneralView = GameState['generals'][number]
 export type PlanKind = 'value' | 'control' | 'burst' | 'defense'
@@ -197,29 +196,6 @@ export function targetScore(g: GeneralView, terms: TargetTerms): number {
     return Math.max(-10, Math.min(28, raw * TARGET_SCALE))
 }
 
-/**
- * 嘲讽值（学自 QSanguosha 的 ai_chaofeng）：越能持续改变局势的武将越该先压。
- * 治疗/摸牌引擎（辅助）> 控制/核心 > 输出 > 盾将；握牌多的再加一档。
- */
-const ROLE_TAUNT: Record<string, number> = {
-    support: 2,
-    control: 1,
-    core: 1,
-    damage: 0.5,
-    tank: -0.5,
-}
-
-export function tauntOf(g: GeneralView): number {
-    const roles = rolesOf(g.generalId)
-    return roles.reduce((best, role) => Math.max(best, ROLE_TAUNT[role] ?? 0), 0)
-}
-
-/** 威胁度 0..3，供 targetScore 使用 */
-export function threatLevel(g: GeneralView): number {
-    const raw = 1 + tauntOf(g) + (g.hand.length >= 4 ? 1 : 0)
-    return Math.max(0, Math.min(3, raw))
-}
-
 /** 虚弱（学自 QSanguosha 的 isWeak）：体力≤1，或体力≤2 且手牌≤2 */
 export function isWeak(g: GeneralView): boolean {
     return g.alive && (g.hp <= 1 || (g.hp <= 2 && g.hand.length <= 2))
@@ -364,4 +340,69 @@ export function choosePlan(actions: ScoredAction[]): PlanKind {
         }
     }
     return best
+}
+
+// ─────────────────────────────────────────────────────────────
+// 动作评分：预设优先级 + 收益 - 风险 + 战略权重
+// ─────────────────────────────────────────────────────────────
+
+export interface ActionEstimate {
+    /** 预设优先级：这张牌/技能在同类动作里的基础地位 */
+    preset: number
+    /** 收益：执行后目标状态变化（掉血、弃牌、失去装备、被控制） */
+    gain: number
+    /** 风险：自身暴露、手牌消耗、关键牌机会成本 */
+    risk: number
+    /** 战略权重：集火、保核、斩杀窗口、节奏 */
+    strategic: number
+    /** 即时价值 = preset + gain - risk + strategic */
+    immediate: number
+}
+
+export function estimateAction(parts: Omit<ActionEstimate, 'immediate'>): ActionEstimate {
+    return { ...parts, immediate: parts.preset + parts.gain - parts.risk + parts.strategic }
+}
+
+/**
+ * 预设优先级：只回答“这张牌本身值多少”，不含任何局面修正。
+ * 与 `offer` 的 key 对齐；技能和特殊牌沿用通用技能分。
+ */
+export function presetPriority(key: string): number {
+    const alias: Record<string, keyof typeof BASE_SCORE> = {
+        dismantle_ally: 'dismantle',
+        steal_ally: 'steal',
+        longdan: 'slash',
+        wusheng: 'slash',
+        huomo_slash: 'slash',
+        lihuo: 'slash',
+    }
+    const name = alias[key] ?? key
+    if (name.startsWith('skill:')) return BASE_SCORE.skill
+    if (name.startsWith('jiaozhao:')) {
+        const inner = name.slice('jiaozhao:'.length) as keyof typeof BASE_SCORE
+        return BASE_SCORE[inner] ?? BASE_SCORE.skill
+    }
+    if (name.startsWith('equip_')) return 30
+    return (BASE_SCORE as Record<string, number>)[name] ?? BASE_SCORE.skill
+}
+
+/**
+ * 回合总收益期望：本动作的即时价值 + 同计划后续动作的折算价值。
+ * 同一条计划内按 0.85 / 0.7 / 0.55 递减，跨计划只取最高一项的 0.5；
+ * 后续收益整体再乘 0.35，只用于在接近的候选之间排先后，不让低分动作靠后续高分反超。
+ */
+const TURN_FOLLOW_SCALE = 0.35
+
+export function turnValueOf(
+    immediate: number,
+    plans: PlanKind[],
+    peers: Array<{ immediate: number; plans: PlanKind[] }>,
+): number {
+    const shares = (peer: { plans: PlanKind[] }) =>
+        peer.plans.some((plan) => plans.includes(plan))
+    const same = peers.filter(shares).map((peer) => peer.immediate).sort((a, b) => b - a)
+    const cross = peers.filter((peer) => !shares(peer)).map((peer) => peer.immediate).sort((a, b) => b - a)
+    const follow = 0.85 * (same[0] ?? 0) + 0.7 * (same[1] ?? 0) + 0.55 * (same[2] ?? 0) +
+        0.5 * (cross[0] ?? 0)
+    return immediate + TURN_FOLLOW_SCALE * follow
 }

@@ -6,7 +6,7 @@
  * 这里的每条结论都必须与 game-actions.ts 的实际结算一致，否则 AI 会做出引擎拒绝的操作。
  *
  * 已登记：奇才（拆牌目标过滤）、杀伤害加成来源、青囊（主动治疗）、拆牌位选择、
- * 断粮（合法目标）、解烦（目标阵营）、崩坏与将驰（选项取舍）。
+ * 断粮（合法目标）、解烦（目标阵营）、崩坏与将驰（选项取舍）、胆守（牌差取舍）。
  */
 import { BasicCardName, Card, EquipSlot, EquipmentCardName, Faction, GameState, SeatRole, TrickCardName } from 'sgs3v3-shared'
 import { hasSkillOf } from './ai-synergy'
@@ -254,6 +254,41 @@ export function pickJiefanTarget(
  */
 export function pickBanghuaiChoice(hp: number, maxHp: number): 'loseHp' | 'reduceMaxHp' {
     return hp < maxHp ? 'reduceMaxHp' : 'loseHp'
+}
+
+/**
+ * 胆守（界朱然）：四项各只能执行一次，执行后须弃置「本次序号」张牌
+ * （game-actions.ts 的 dsCost = min(dsItem, 手牌 + 装备)）。
+ *
+ * 代价与收益必须按相对牌差算，否则会高估③的价值：
+ *   ① 弃敌方一张（lowValueCard 取敌方最低价值牌） / 弃自己 1 张 → 牌差 0
+ *   ② 获得敌方一张（gainRandomCardFrom 随机）      / 弃自己 2 张 → 牌差 0
+ *   ③ 对敌方造成 1 点伤害                          / 弃自己 3 张 → 牌差 -3
+ *   ④ 双方各摸两张                                 / 弃自己 4 张 → 牌差 -4
+ *
+ * 所以①②是零牌差的纯收益，任何时候都优于③；③只留给斩杀线
+ * （统率三军主帅阵亡即负，一点伤害换三张牌在斩杀上是划算的）。
+ *
+ * 统计上量不出差异：A/B 3000 种子 × 4 座位共 12000 局，Δ=+0.03%、p=0.80，
+ * 因为胆守只占全部决策 0.29%。本条结论来自引擎结算的牌差推导，不是统计结论。
+ */
+export function pickDanshouChoice(
+    options: readonly { action: string }[],
+    targetIsEnemy: boolean,
+    targetHp: number,
+    cardCount: number,
+): string {
+    const has = (action: string): boolean => options.some((o) => o.action === action)
+    if (targetIsEnemy) {
+        if (targetHp <= 1 && has('3')) return '3'
+        if (has('2') && cardCount >= 2) return '2'
+        if (has('1') && cardCount >= 1) return '1'
+        if (has('3')) return '3'
+        if (has('4')) return '4'
+        return options[0]?.action ?? 'decline'
+    }
+    if (has('4') && cardCount >= 5) return '4'
+    return 'decline'
 }
 
 /**

@@ -24,9 +24,15 @@ import { ensureDeck } from './deck'
 import { bestGiftTarget, cardFit, damageBackfire } from './ai-synergy'
 import { analyzeStrategy } from './ai-strategy'
 import { delayedSuccessChance, dodgeHoldValue, negateRisk, predictAoe, predictSlash, teamView } from './ai-forecast'
+import { estimateAction, presetPriority, turnValueOf } from './ai-policy'
+import { detectObjective } from './ai-objective'
 import {
     enemyPlans, guessHand, handDodgeChance, knownHand, poolView, predictEnemyTurn, rememberCards,
+    teamResource,
 } from './ai-memory'
+import {
+    activeAbility, healthState, identityValue, passiveAbility, tauntPresetOf, tauntScore, tauntVector,
+} from './ai-taunt'
 
 let failures = 0
 
@@ -273,7 +279,7 @@ console.log('[选将]')
     check('首抓按强度拿郭嘉', chosen(pickState(['guojia', 'huatuo', 'huangyueying', 'zhangfei'], [], []), []) === 'guojia')
     check('已有两输出时补辅助',
         chosen(pickState(['machao', 'sunshangxiang'], ['zhangfei', 'huanggai'], []), ['zhangfei', 'huanggai']) === 'sunshangxiang')
-    check('抢对手的郭嘉搭档', chosen(pickState(['huangyueying', 'zhaoyun'], [], ['guojia']), []) === 'huangyueying')
+    check('抢对手的郭嘉搭档', chosen(pickState(['huangyueying', 'zhaoyun_jing'], [], ['guojia']), []) === 'huangyueying')
 
     const deploy = createLocalMatch(Faction.COOL, 22)
     deploy.phase = GamePhase.DEPLOY
@@ -301,7 +307,7 @@ console.log('[牌序]')
         s.turnPhase = TurnPhase.ACTION
         const roles: any[] = [SeatRole.FLANK_A, SeatRole.COMMANDER, SeatRole.FLANK_B]
         s.generals = [
-            ...['caocao', 'zhaoyun', 'zhenji'].map((id, i) =>
+            ...['caocao', 'zhaoyun_jing', 'zhenji'].map((id, i) =>
                 createGeneralInstance(getGeneralById(id)!, AI_PLAYER_ID, Faction.WARM, roles[i])),
             ...['caocao', 'guojia', 'huatuo'].map((id, i) =>
                 createGeneralInstance(getGeneralById(id)!, HUMAN_PLAYER_ID, Faction.COOL, roles[i])),
@@ -486,6 +492,54 @@ console.log('[战略]')
         `saving=${analyzeStrategy(s4, AI_PLAYER_ID).enemySaving}`)
 }
 
+console.log('[评分]')
+{
+    const est = estimateAction({ preset: 50, gain: 12, risk: 4, strategic: 6 })
+    check('动作评分 = 预设 + 收益 - 风险 + 战略', est.immediate === 64, est)
+    check('预设优先级取基础分',
+        presetPriority('draw_two') === 90 && presetPriority('slash') === 50,
+        `${presetPriority('draw_two')}/${presetPriority('slash')}`)
+    check('技能与装备走兜底预设分',
+        presetPriority('skill:kurou') === 60 && presetPriority('equip_weapon') === 30)
+    const peers = [
+        { immediate: 60, plans: ['burst' as const] },
+        { immediate: 40, plans: ['burst' as const] },
+        { immediate: 30, plans: ['value' as const] },
+    ]
+    const turn = turnValueOf(50, ['burst'], peers)
+    check('回合总收益计入同计划后续动作',
+        Math.abs(turn - (50 + 0.35 * (0.85 * 60 + 0.7 * 40 + 0.5 * 30))) < 1e-9, turn)
+    check('没有后续动作时回合收益等于即时价值',
+        turnValueOf(50, ['burst'], []) === 50)
+}
+
+console.log('[目标]')
+{
+    const s = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'zhenji', 'xiahoudun'])
+    const allies = s.generals.map((g, index) => ({ g, index })).filter(({ index }) => index < 3)
+    const enemies = s.generals.map((g, index) => ({ g, index })).filter(({ index }) => index >= 3)
+    s.generals[0].judgeZone.push(card('jm1', TrickCardName.OVERINDULGENCE, CardSuit.SPADE, 6,
+        CardCategory.TRICK, { trickType: 'delayed' }))
+    const breakDelayed = detectObjective({
+        focusIndex: 4, allies, enemies, plans: [], killWindow: false, commanderKill: false,
+    })
+    check('队友被贴乐 → 先解除延时',
+        breakDelayed?.kind === 'break-ally-delayed' && breakDelayed.targetIndex === 0, breakDelayed)
+    s.generals[0].judgeZone = []
+    const kill = detectObjective({
+        focusIndex: 4, allies, enemies, plans: [], killWindow: true, commanderKill: true,
+    })
+    check('敌方主帅可斩杀 → 集火核心',
+        kill?.kind === 'focus-core' && kill.priority === 120, kill)
+    const limit = detectObjective({
+        focusIndex: 3, allies, enemies, killWindow: false, commanderKill: false,
+        plans: [{ index: 4, rawDamage: 2, damage: 2, reachesCommander: true,
+            actsThisRound: true, threat: 20 }],
+    })
+    check('高威胁敌人即将行动 → 先限制',
+        limit?.kind === 'limit-enemy-next' && limit.targetIndex === 4, limit)
+}
+
 console.log('[预测]')
 {
     const s = createLocalMatch(Faction.COOL, 41)
@@ -614,6 +668,121 @@ console.log('[记忆]')
     check('乐不思蜀把下一回合的伤害压到三成以下', slowed.damage < plan.rawDamage * 0.3, slowed)
     check('威胁最高的敌人排在预测列表首位', enemyPlans(s5, HUMAN_PLAYER_ID)[0].index === 0,
         enemyPlans(s5, HUMAN_PLAYER_ID).map((x) => `${x.index}:${x.threat}`))
+
+    // 同一张公开牌同时出现在弃牌堆和将牌上，只能扣一次
+    const sDedup = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'zhenji', 'xiahoudun'])
+    const dup = card('dup1', BasicCardName.DODGE, CardSuit.HEART, 2)
+    sDedup.discard = [dup]
+    sDedup.generals[0].generalPile = [dup]
+    const sNoDup = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'zhenji', 'xiahoudun'])
+    sNoDup.discard = [dup]
+    check('同一张公开牌只扣一次',
+        poolView(sDedup, HUMAN_PLAYER_ID).unseen === poolView(sNoDup, HUMAN_PLAYER_ID).unseen,
+        `${poolView(sDedup, HUMAN_PLAYER_ID).unseen} vs ${poolView(sNoDup, HUMAN_PLAYER_ID).unseen}`)
+
+    // 国色/断粮等转化牌要按 originalName 扣牌
+    const sConvert = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'zhenji', 'xiahoudun'])
+    sConvert.discard = [card('conv1', TrickCardName.OVERINDULGENCE, CardSuit.DIAMOND, 6,
+        CardCategory.TRICK, { trickType: 'delayed', originalName: BasicCardName.DODGE })]
+    const convPool = poolView(sConvert, HUMAN_PLAYER_ID)
+    check('转化牌按原牌名扣除',
+        convPool.left('dodge') === KEY_CARD_COUNTS.dodge - 1 &&
+        convPool.left('overindulgence') === KEY_CARD_COUNTS.overindulgence,
+        { dodge: convPool.left('dodge'), overindulgence: convPool.left('overindulgence') })
+
+    // 至少一张按无放回超几何算（目标武将没有留牌倾向，便于和裸牌池对齐）
+    const sOdds = build(['sunquan', 'huatuo', 'caocao'], ['diaochan', 'zhenji', 'xiahoudun'])
+    sOdds.discard = Array.from({ length: 20 }, (_, i) =>
+        card('od' + i, BasicCardName.DODGE, CardSuit.HEART, (i % 9) + 1))
+    sOdds.generals[0].hand = Array.from({ length: 3 }, (_, i) =>
+        card('oh' + i, BasicCardName.ATTACK, CardSuit.SPADE, (i % 9) + 2))
+    const oddsGuess = guessHand(sOdds, HUMAN_PLAYER_ID, 0)
+    const oddsPool = poolView(sOdds, HUMAN_PLAYER_ID)
+    check('至少一张闪按无放回计算',
+        Math.abs(oddsGuess.atLeastOne('dodge') -
+            atLeastOneChance(oddsGuess.unknown, oddsPool.left('dodge'), oddsPool.unseen)) < 0.02,
+        { model: oddsGuess.atLeastOne('dodge'), raw: atLeastOneChance(oddsGuess.unknown, oddsPool.left('dodge'), oddsPool.unseen) })
+
+    // 技能留牌：张飞的未知手牌更偏向杀
+    const sZhangfei = build(['sunquan', 'huatuo', 'caocao'], ['zhangfei', 'zhenji', 'xiahoudun'])
+    const sSunquan = build(['sunquan', 'huatuo', 'caocao'], ['sunquan', 'zhenji', 'xiahoudun'])
+    for (const s of [sZhangfei, sSunquan]) {
+        s.generals[0].hand = Array.from({ length: 4 }, (_, i) =>
+            card('t' + i, BasicCardName.ATTACK, CardSuit.SPADE, (i % 9) + 2))
+    }
+    const zfGuess = guessHand(sZhangfei, HUMAN_PLAYER_ID, 0)
+    const sqGuess = guessHand(sSunquan, HUMAN_PLAYER_ID, 0)
+    check('张飞留杀倾向高于孙权', zfGuess.expected.slash > sqGuess.expected.slash,
+        `${zfGuess.expected.slash.toFixed(3)} vs ${sqGuess.expected.slash.toFixed(3)}`)
+
+    // 明牌固定，未知部分才按概率
+    const sKnown = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'zhenji', 'xiahoudun'])
+    sKnown.generals[0].hand = [
+        card('kh1', BasicCardName.DODGE, CardSuit.HEART, 2),
+        card('kh2', BasicCardName.ATTACK, CardSuit.SPADE, 7),
+    ]
+    rememberCards(sKnown, 0, [sKnown.generals[0].hand[0]], '智愚')
+    const knownGuess = guessHand(sKnown, HUMAN_PLAYER_ID, 0)
+    check('明牌有闪则至少一张闪为 1', knownGuess.atLeastOne('dodge') === 1)
+    check('明牌比例进入置信度', knownGuess.knownRatio === 0.5 && knownGuess.confidence === 0.5,
+        `${knownGuess.knownRatio}/${knownGuess.confidence}`)
+
+    // 弃牌堆里的闪：已使用/已弃置的牌压低剩余手牌期望
+    const sPlayed = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'zhenji', 'xiahoudun'])
+    sPlayed.generals[0].hand = Array.from({ length: 3 }, (_, i) =>
+        card('ph' + i, BasicCardName.ATTACK, CardSuit.SPADE, (i % 9) + 2))
+    const beforePlayed = guessHand(sPlayed, HUMAN_PLAYER_ID, 0).expected.dodge
+    const playedBefore = poolView(sPlayed, HUMAN_PLAYER_ID).played('dodge')
+    sPlayed.discard = [...sPlayed.discard, ...Array.from({ length: 20 }, (_, i) =>
+        card('pd' + i, BasicCardName.DODGE, CardSuit.HEART, (i % 9) + 1))]
+    const afterPlayed = guessHand(sPlayed, HUMAN_PLAYER_ID, 0).expected.dodge
+    check('已弃置的闪压低剩余手牌闪期望', afterPlayed < beforePlayed,
+        `${beforePlayed.toFixed(3)} -> ${afterPlayed.toFixed(3)}`)
+    check('弃牌堆统计已使用/已弃置的闪',
+        poolView(sPlayed, HUMAN_PLAYER_ID).played('dodge') - playedBefore === 20,
+        poolView(sPlayed, HUMAN_PLAYER_ID).played('dodge') - playedBefore)
+
+    // 桃与无懈是全队共享：任一存活队友手里有，全队就有一张
+    const sTeam = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'zhenji', 'xiahoudun'])
+    for (const g of sTeam.generals) g.hand = []
+    const teamPeachCard = card('tm1', BasicCardName.PEACH, CardSuit.HEART, 3)
+    const teamNegateCard = card('tm2', TrickCardName.NEGATE, CardSuit.SPADE, 2, CardCategory.TRICK)
+    sTeam.generals[0].hand = [teamPeachCard]
+    sTeam.generals[1].hand = [teamNegateCard]
+    rememberCards(sTeam, 0, [teamPeachCard], '五谷丰登')
+    rememberCards(sTeam, 1, [teamNegateCard], '五谷丰登')
+    const teamPeach = teamResource(sTeam, HUMAN_PLAYER_ID, 'peach')
+    const teamNegate = teamResource(sTeam, HUMAN_PLAYER_ID, 'negate')
+    check('团队桃资源合并队友明牌', teamPeach.known === 1 && teamPeach.atLeastOne === 1, teamPeach)
+    check('团队无懈合并队友明牌', teamNegate.known === 1 && teamNegate.atLeastOne === 1, teamNegate)
+    check('单人猜牌看不到队友的桃',
+        guessHand(sTeam, HUMAN_PLAYER_ID, 2).atLeastOne('peach') === 0)
+
+    // 未知手牌也要按全队合并，不能只取某一个人的概率
+    const sTeamU = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'zhenji', 'xiahoudun'])
+    for (const g of sTeamU.generals) g.hand = []
+    for (let i = 0; i < 5; i++) {
+        sTeamU.generals[0].hand.push(card('tu0' + i, BasicCardName.ATTACK, CardSuit.SPADE, i + 2))
+        sTeamU.generals[1].hand.push(card('tu1' + i, BasicCardName.ATTACK, CardSuit.SPADE, i + 2))
+    }
+    const soloPeachChance = guessHand(sTeamU, HUMAN_PLAYER_ID, 0).atLeastOne('peach')
+    const teamPeachChance = teamResource(sTeamU, HUMAN_PLAYER_ID, 'peach').atLeastOne
+    check('团队桃概率高于任一单人',
+        teamPeachChance > soloPeachChance && teamPeachChance > 0.1,
+        `${soloPeachChance.toFixed(3)} -> ${teamPeachChance.toFixed(3)}`)
+
+    // 已使用的桃同样从全队资源里扣
+    const beforeUsedPeach = teamResource(sTeamU, HUMAN_PLAYER_ID, 'peach').expected
+    sTeamU.discard = Array.from({ length: 10 }, (_, i) =>
+        card('ud' + i, BasicCardName.PEACH, CardSuit.HEART, (i % 9) + 1))
+    check('已使用的桃压低全队桃期望',
+        teamResource(sTeamU, HUMAN_PLAYER_ID, 'peach').expected < beforeUsedPeach,
+        `${beforeUsedPeach.toFixed(3)} -> ${teamResource(sTeamU, HUMAN_PLAYER_ID, 'peach').expected.toFixed(3)}`)
+
+    // 阵亡队友的桃不再计入团队救援
+    sTeam.generals[0].alive = false
+    const deadPeach = teamResource(sTeam, HUMAN_PLAYER_ID, 'peach')
+    check('阵亡队友的桃不计入团队资源', deadPeach.known === 0 && deadPeach.atLeastOne === 0, deadPeach)
 }
 
 console.log('[结算修复]')
@@ -650,7 +819,7 @@ console.log('[结算修复]')
 }
 {
     // 白银狮子：被拆掉时回复1点体力
-    const s = build(['zhaoyun', 'caocao', 'zhenji'], ['sunquan', 'huatuo', 'guojia'])
+    const s = build(['zhaoyun_jing', 'caocao', 'zhenji'], ['sunquan', 'huatuo', 'guojia'])
     const zy = s.generals[3]
     zy.hp = zy.maxHp - 1
     zy.equip.armor = card('sl1', EquipmentCardName.SILVER_LION, CardSuit.SPADE, 2,
@@ -1250,6 +1419,87 @@ console.log('[技能发动时一并选目标/选牌]')
     check('推锋不再二次询问选牌',
         !s.pendingResponseQueue.some(p => p.type === ResponseType.SKILL_PICK_CARD), queue(s))
 }
+{
+    // 天香（洛书版）：确认时同时给出♥牌与转移目标 → 不再二次询问
+    const s = build(['xiaoqiao', 'sunquan', 'huatuo'], ['guojia', 'zhenji', 'xiahoudun'], 74)
+    const xq = s.generals[3]
+    xq.hand = [card('txh', BasicCardName.DODGE, CardSuit.HEART, 2)]
+    s.pendingResponseQueue = [{
+        type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+        targetGeneralIndex: 3,
+        context: { skillId: 'xiaoqiao_tianxiang_luoshu', skillName: '天香', damageAmount: 1, attackerIndex: 0 },
+    }]
+    const txCtx = ((toClientView(s, HUMAN_PLAYER_ID) as any).pendingResponse?.context) ?? {}
+    check('天香询问声明可提前选牌与目标',
+        txCtx.cardSelectOnActivate === true && txCtx.targetSelectOnActivate === true, txCtx)
+    check('天香候选牌只列♥',
+        Array.isArray(txCtx.candidateCardIds) && txCtx.candidateCardIds.length === 1
+        && txCtx.candidateCardIds[0] === 'txh', txCtx.candidateCardIds)
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'confirm', cardIds: ['txh'], targetIndices: [0] } as any)
+    check('天香弃掉所选的♥牌', s.discard.some((c: any) => c.id === 'txh'), s.discard.map((c: any) => c.id))
+    check('天香直接进入转移后续选择',
+        s.pendingResponseQueue[0]?.type === ResponseType.SKILL_TIANXIANG_LUOSHU_OPTION, queue(s))
+    check('天香不再二次询问转移目标',
+        !s.pendingResponseQueue.some(p => p.type === ResponseType.SKILL_TIANXIANG_CHOOSE), queue(s))
+}
+{
+    // 强识（界张松）：确认时选好目标 → 直接观看并记录类别
+    const s = build(['zhangsong_jie', 'sunquan', 'huatuo'], ['guojia', 'zhenji', 'xiahoudun'], 75)
+    const zs = s.generals[3]
+    s.generals[0].hand = [card('qs1', BasicCardName.ATTACK, CardSuit.SPADE, 7)]
+    s.pendingResponseQueue = [{
+        type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+        targetGeneralIndex: 3,
+        context: { skillId: 'zhangsong_qiangshi', skillName: '强识' },
+    }]
+    const qsCtx = ((toClientView(s, HUMAN_PLAYER_ID) as any).pendingResponse?.context) ?? {}
+    check('强识询问声明可提前选目标', qsCtx.targetSelectOnActivate === true, qsCtx)
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'confirm', targetIndices: [0] } as any)
+    check('强识按已选目标直接结算', zs.qiangshiCategory === CardCategory.BASIC, zs.qiangshiCategory)
+    check('强识不再二次询问目标',
+        !s.pendingResponseQueue.some(p => p.type === ResponseType.SKILL_CHOOSE_TARGET), queue(s))
+}
+{
+    // 献图（界张松）：选项询问上先选好交牌 → 摸牌后直接交出
+    const s = build(['zhangsong_jie', 'sunquan', 'huatuo'], ['guojia', 'zhenji', 'xiahoudun'], 76)
+    const zs = s.generals[3]
+    zs.hand = [card('xt1', BasicCardName.ATTACK, CardSuit.SPADE, 3), card('xt2', BasicCardName.DODGE, CardSuit.HEART, 4)]
+    s.deck = [card('xtd1', BasicCardName.PEACH, CardSuit.CLUB, 5), card('xtd2', BasicCardName.PEACH, CardSuit.CLUB, 6)]
+    const before = s.generals[0].hand.length
+    s.pendingResponseQueue = [{
+        type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+        targetGeneralIndex: 3,
+        context: {
+            skillId: 'zhangsong_xiantu', skillName: '献图', xiantuTargetIndex: 0,
+            options: [{ action: 'one', label: '摸一张' }, { action: 'two', label: '摸两张' }],
+        },
+    }]
+    const xtCtx = ((toClientView(s, HUMAN_PLAYER_ID) as any).pendingResponse?.context) ?? {}
+    check('献图选项询问声明可提前选交牌', xtCtx.cardSelectOnActivate === true, xtCtx)
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'two', cardIds: ['xt1', 'xt2'] } as any)
+    check('献图把已选牌直接交给目标', s.generals[0].hand.length === before + 2,
+        { before, after: s.generals[0].hand.length })
+    check('献图不再二次询问选牌',
+        !s.pendingResponseQueue.some(p => p.type === ResponseType.SKILL_PICK_CARD), queue(s))
+}
+{
+    // 燕语（夏侯氏）：结束阶段询问本身就是“点目标即结算”
+    const s = build(['xiahoushi', 'sunquan', 'huatuo'], ['guojia', 'zhenji', 'xiahoudun'], 77)
+    const yyTarget = s.generals[0]
+    s.deck = [card('yyd1', BasicCardName.PEACH, CardSuit.CLUB, 5), card('yyd2', BasicCardName.PEACH, CardSuit.CLUB, 6)]
+    const before = yyTarget.hand.length
+    s.pendingResponseQueue = [{
+        type: ResponseType.SKILL_CHOOSE_TARGET,
+        targetGeneralIndex: 3,
+        context: {
+            skillId: 'xiahoushi_yanyu_end', skillName: '燕语',
+            description: '令一名男性角色摸两张牌', candidateIndices: [0, 1, 2, 4, 5],
+        },
+    }]
+    handleRespond(s, HUMAN_PLAYER_ID, { targetIndex: 0 } as any)
+    check('燕语点选目标即结算摸牌', yyTarget.hand.length === before + 2,
+        { before, after: yyTarget.hand.length })
+}
 
 console.log('[好施]')
 {
@@ -1446,6 +1696,70 @@ console.log('[蒺藜]')
         !!jili5 && (jili5.context as any).jiliCount === 5,
         jili5 ? (jili5.context as any).jiliCount : queue(s))
 }
+{
+    // 打出【闪】同样计入“本回合使用或打出的第 X 张牌”
+    const s = build(['sunquan', 'huatuo', 'caocao'], ['shamoke', 'zhenji', 'xiahoudun'], 99)
+    const smk = s.generals[0]
+    smk.cardsUsedTurnCount = 0
+    smk.hand = [card('jd-dodge', BasicCardName.DODGE, CardSuit.HEART, 2)]
+    s.pendingResponseQueue = [{
+        type: ResponseType.DODGE,
+        targetGeneralIndex: 0,
+        context: {
+            attackerGeneralIndex: 3,
+            requiredDodges: 1,
+            dodgesReceived: 0,
+            attackCard: card('jd-slash', BasicCardName.ATTACK, CardSuit.SPADE, 7),
+        },
+    }]
+    handleRespond(s, AI_PLAYER_ID, { cardId: 'jd-dodge' } as any)
+    const jiliPlayed = findPending(s, 'shamoke_jili')
+    check('打出【闪】也触发蒺藜（无武器时范围1）',
+        !!jiliPlayed && (jiliPlayed.context as any).jiliCount === 1, queue(s))
+}
+{
+    // 使用【杀】后蒺藜应先于出闪/伤害结算询问
+    const s = build(['shamoke', 'sunquan', 'huatuo'], ['zhenji', 'xiahoudun', 'simayi_jie'], 100)
+    const smk = s.generals[3]
+    smk.cardsUsedTurnCount = 0
+    smk.hand = [card('jd-sl', BasicCardName.ATTACK, CardSuit.SPADE, 7)]
+    s.generals[2].hand = [card('jd-dd', BasicCardName.DODGE, CardSuit.HEART, 2)]
+    const res = handleUseCard(s, HUMAN_PLAYER_ID, { cardId: 'jd-sl', targetIndices: [2] } as any)
+    check('沙摩柯对界司马懿使用【杀】', !(res && 'error' in res), res)
+    check('蒺藜在出闪之前询问',
+        (s.pendingResponseQueue[0]?.context as any)?.skillId === 'shamoke_jili'
+        && s.pendingResponseQueue.some(p => p.type === ResponseType.DODGE), queue(s))
+}
+
+console.log('[胆守：弃置装备]')
+{
+    const s = build(['zhuran_jie', 'sunquan', 'huatuo'], ['caocao', 'guojia', 'zhenji'], 101)
+    const zr = s.generals[3]
+    s.activeGeneralIndex = 3
+    zr.hand = []
+    zr.equip.weapon = card('ds-eq', EquipmentCardName.QINGGANG_SWORD, CardSuit.SPADE, 6,
+        CardCategory.EQUIPMENT, { equipSlot: EquipSlot.WEAPON, attackRange: 2 })
+    s.generals[0].hand = [card('ds-t', BasicCardName.PEACH, CardSuit.HEART, 3)]
+    s.pendingResponseQueue = [{
+        type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+        targetGeneralIndex: 3,
+        context: {
+            skillId: 'zhuran_danshou', skillName: '胆守',
+            options: [{ action: '1', label: '①弃置其一张牌' }],
+            danshouTargetIndex: 0,
+        },
+    }]
+    handleRespond(s, HUMAN_PLAYER_ID, { action: '1' } as any)
+    const pick = findPending(s, 'zhuran_danshou_cost')
+    check('胆守的弃牌代价可选装备',
+        !!pick && ((pick.context as any).candidateCardIds ?? []).includes('ds-eq'), queue(s))
+    if (pick) {
+        handleRespond(s, HUMAN_PLAYER_ID, { cardIds: ['ds-eq'] } as any)
+        check('胆守弃置了装备区的牌',
+            !zr.equip.weapon && s.discard.some(c => c.id === 'ds-eq'),
+            `weapon=${zr.equip.weapon?.name ?? 'none'}`)
+    }
+}
 
 console.log('[留闪]')
 {
@@ -1476,11 +1790,25 @@ console.log('[留闪]')
         const v = dodgeHoldValue(s, HUMAN_PLAYER_ID, s.generals.indexOf(me), 3)
         check('酒杀这一刀必须闪', !v.hold && v.currentDamage === 2, v)
     }
-    // 体力厚、对方手里还留着酒 + 连弩：留闪给之后的酒杀
+    // 体力厚、对方手里还留着酒 + 连弩，且自己有桃兜底：留闪给之后的酒杀
+    {
+        const { s, me } = slashSetup({ hp: 4, wineCard: true, crossbow: true })
+        me.hand.push(card('me-peach', BasicCardName.PEACH, CardSuit.HEART, 3))
+        const v = dodgeHoldValue(s, HUMAN_PLAYER_ID, s.generals.indexOf(me), 3)
+        check('有桃时留闪给之后的酒杀', v.hold && v.futureDamage >= 2 && v.futureRisk >= 0.5, v)
+    }
+    // 同场景但没有桃：不能为了留闪送命
     {
         const { s, me } = slashSetup({ hp: 4, wineCard: true, crossbow: true })
         const v = dodgeHoldValue(s, HUMAN_PLAYER_ID, s.generals.indexOf(me), 3)
-        check('之后有酒杀时留闪', v.hold && v.futureDamage >= 2 && v.futureRisk >= 0.5, v)
+        check('没有救援资源时不拿命留闪', !v.hold, v)
+    }
+    // 1 血、对方连弩 + 明牌酒，但自己有桃：先吃这一刀，濒死用桃救，闪留给下一刀
+    {
+        const { s, me } = slashSetup({ hp: 1, wineCard: true, crossbow: true })
+        me.hand.push(card('me-peach-low', BasicCardName.PEACH, CardSuit.HEART, 3))
+        const v = dodgeHoldValue(s, HUMAN_PLAYER_ID, s.generals.indexOf(me), 3)
+        check('1 血有桃时也留闪', v.hold && v.currentDamage === 1, v)
     }
     // 体力只剩 2：不能为了留闪送命
     {
@@ -1848,6 +2176,105 @@ console.log('[濒死询问：轮转换对象 + 兜底结算]')
     s.pendingResponseQueue = s.pendingResponseQueue.filter((p: any) => p.type !== ResponseType.PEACH_SAVE_ASK)
     processAutoExecutePending(s)
     check('濒死询问丢失时兜底判定阵亡', !zf.alive, `alive=${zf.alive} hp=${zf.hp}`)
+}
+
+console.log('[嘲讽向量]')
+{
+    const hand = (n: number) => Array.from({ length: n }, (_, i) =>
+        card(`tv-h${i}`, BasicCardName.ATTACK, CardSuit.SPADE, (i % 9) + 1))
+
+    const s = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'lusu', 'zhangfei'], 120)
+    const gj = s.generals[0]
+    const ls = s.generals[1]
+    const zf = s.generals[2]
+    check('郭嘉：主动低、被动强（负值）', activeAbility(s, gj) < 40 && passiveAbility(s, gj) < -60,
+        { active: activeAbility(s, gj), passive: passiveAbility(s, gj) })
+    check('鲁肃：主动高、无被动防御', activeAbility(s, ls) > 80 && passiveAbility(s, ls) === 0,
+        { active: activeAbility(s, ls), passive: passiveAbility(s, ls) })
+    check('指定武将近战预设生效',
+        tauntPresetOf('lusu').active === 95 && tauntPresetOf('lusu').hand === 9 &&
+        tauntPresetOf('shenlusu').active === 90 && tauntPresetOf('shenlusu').hand === 9 &&
+        tauntPresetOf('lvbu').active === 40 && tauntPresetOf('lvbu_jing').active === 40 &&
+        tauntPresetOf('zhangfei').hand === 7 && tauntPresetOf('zhangfei_jie').hand === 7,
+        [tauntPresetOf('lusu'), tauntPresetOf('shenlusu'), tauntPresetOf('lvbu'), tauntPresetOf('zhangfei')])
+    check('无防御被动为 0，防御被动为负',
+        tauntPresetOf('lusu').passive === 0 && tauntPresetOf('shenlusu').passive === 0 &&
+        tauntPresetOf('guojia').passive < 0 && tauntPresetOf('xiahoudun').passive < 0)
+
+    const zfBase = activeAbility(s, zf)
+    zf.hand = hand(6)
+    check('张飞手牌越多主动能力越高', activeAbility(s, zf) > zfBase + 10,
+        { before: zfBase, after: activeAbility(s, zf) })
+    zf.hand = []
+
+    const activeBase = activeAbility(s, gj)
+    gj.judgeZone = [card('tv-le', TrickCardName.OVERINDULGENCE, CardSuit.HEART, 6,
+        CardCategory.TRICK, { trickType: 'delayed' })]
+    const withLe = activeAbility(s, gj)
+    gj.judgeZone = [card('tv-bing', TrickCardName.SUPPLY_SHORTAGE, CardSuit.CLUB, 6,
+        CardCategory.TRICK, { trickType: 'delayed' })]
+    const withBing = activeAbility(s, gj)
+    gj.judgeZone = []
+    check('乐不思蜀明显降低主动能力', withLe < activeBase - 20, { base: activeBase, withLe })
+    check('兵粮寸断降低主动能力但弱于乐', withBing < activeBase && withBing > withLe,
+        { withBing, withLe })
+    gj.flipped = true
+    check('翻面降低主动能力', activeAbility(s, gj) < activeBase - 30, activeAbility(s, gj))
+    gj.flipped = false
+
+    const s2 = build(['sunquan', 'huatuo', 'caocao'], ['weiyan', 'lusu', 'zhangfei'], 121)
+    const wy = s2.generals[0]
+    const wyBase = activeAbility(s2, wy)
+    wy.usedLimitedSkills = ['weiyan_qimou']
+    check('限定技用掉后主动能力下降', activeAbility(s2, wy) < wyBase - 15,
+        { before: wyBase, after: activeAbility(s2, wy) })
+
+    const s3 = build(['sunquan', 'huatuo', 'caocao'], ['sunce', 'lusu', 'zhangfei'], 122)
+    const sc = s3.generals[0]
+    const scBase = activeAbility(s3, sc)
+    sc.awakened = true
+    check('觉醒后主动能力提升', activeAbility(s3, sc) > scBase + 10,
+        { before: scBase, after: activeAbility(s3, sc) })
+
+    const s4 = build(['sunquan', 'huatuo', 'caocao'], ['zhangfei', 'lusu', 'guojia'], 123)
+    const t = s4.generals[0]
+    t.hp = t.maxHp
+    t.hand = hand(4)
+    t.equip.armor = card('tv-armor', EquipmentCardName.EIGHT_TRIGRAMS, CardSuit.SPADE, 2,
+        CardCategory.EQUIPMENT, { equipSlot: EquipSlot.ARMOR })
+    t.equip.plus_horse = card('tv-horse', EquipmentCardName.PLUS_HORSE, CardSuit.HEART, 5,
+        CardCategory.EQUIPMENT, { equipSlot: EquipSlot.PLUS_HORSE })
+    const healthy = healthState(s4, t)
+    t.hp = 1
+    t.hand = []
+    delete t.equip.armor
+    delete t.equip.plus_horse
+    const weak = healthState(s4, t)
+    check('体力/手牌/防具越差健康状态越低', healthy > weak + 30, { healthy, weak })
+
+    const commander = s4.generals[1]
+    check('主帅身份单独计价', identityValue(commander) === 100 && identityValue(t) === 0,
+        { commander: identityValue(commander), flank: identityValue(t) })
+
+    // 同一健康状态下，主动高的鲁肃比卖血的郭嘉更该先压
+    const gja = s4.generals[2]
+    const lsa = s4.generals[1]
+    for (const g of [gja, lsa]) {
+        g.seatRole = SeatRole.FLANK_A
+        g.hp = g.maxHp
+        g.hand = hand(2)
+        g.equip = {}
+    }
+    check('主动高的目标嘲讽更高',
+        tauntScore(tauntVector(s4, lsa)) > tauntScore(tauntVector(s4, gja)) + 50,
+        { lusu: tauntScore(tauntVector(s4, lsa)), guojia: tauntScore(tauntVector(s4, gja)) })
+
+    // 连携：郭嘉 + 小乔比郭嘉 + 无关武将更能放大主动/被动
+    const withSynergy = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'xiaoqiao', 'zhangfei'], 124)
+    const alone = build(['sunquan', 'huatuo', 'caocao'], ['guojia', 'lusu', 'zhangfei'], 124)
+    check('队友连携使郭嘉的被动更负',
+        activeAbility(withSynergy, withSynergy.generals[0]) > activeAbility(alone, alone.generals[0]) + 3 &&
+        passiveAbility(withSynergy, withSynergy.generals[0]) < passiveAbility(alone, alone.generals[0]) - 2)
 }
 
 if (failures > 0) {

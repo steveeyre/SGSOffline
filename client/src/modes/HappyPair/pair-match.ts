@@ -77,7 +77,7 @@ export function createPairMatch(
     }
     addLog(state, `随机种子 ${seed}（出现异常时可用此种子复现本局）`)
     addLog(state, '欢乐成双：1 号位冷色、2/3 号位暖色、4 号位冷色，四方同时选将')
-    // autoDraft=false 时把 AI 席位的选将留给调用方
+    // autoDraft=false 时把 AI 席位的选将留给调用方（自对弈/校测构造固定阵容用）
     if (autoDraft) aiPairDraft(state, () => setupPairPlay(state))
     return state
 }

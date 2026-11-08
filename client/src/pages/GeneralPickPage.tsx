@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useGameStore } from '../store/gameStore'
-import { emit } from '../socket/client'
+import { emit } from '../actions'
 import { GENERAL_IMAGE } from '../data/generalImages'
 import { useTooltip, generalTooltipContent, TooltipBubble } from '../components/Tooltip'
 import {

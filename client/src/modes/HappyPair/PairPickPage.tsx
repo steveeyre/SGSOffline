@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Faction, GamePhase } from 'sgs3v3-shared'
 import { useGameStore } from '../../store/gameStore'
-import { emit } from '../../socket/client'
+import { emit } from '../../actions'
 import { GENERAL_IMAGE } from '../../data/generalImages'
 import { useTooltip, generalTooltipContent, TooltipBubble } from '../../components/Tooltip'
 import { pairSeatsOf } from './pair-draft'
@@ -15,7 +15,6 @@ const SEAT_FACTIONS = [Faction.COOL, Faction.WARM, Faction.WARM, Faction.COOL]
 export default function PairPickPage() {
     const navigate = useNavigate()
     const gameState = useGameStore((s) => s.gameState)
-    const llmThinking = useGameStore((s) => s.llmThinking)
     const pick = gameState?.pairPick
     const humanSide = gameState?.pairHumanSide
     const phase = gameState?.phase
@@ -112,9 +111,7 @@ export default function PairPickPage() {
                                 <div className="landlord-pick-hidden">
                                     <div className="landlord-pick-hidden-mark">？</div>
                                     <div className="landlord-pick-hidden-text">
-                                        {pickedId
-                                            ? '对手已选定武将'
-                                            : llmThinking === '选将' ? '对手（AI）正在思考…' : '对手正在选将…'}
+                                        {pickedId ? '对手已选定武将' : '对手正在选将…'}
                                     </div>
                                 </div>
                             )}

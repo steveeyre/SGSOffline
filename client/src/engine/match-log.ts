@@ -1,4 +1,4 @@
-import type { GameState } from 'sgs3v3-shared'
+import type { GameState, LogEntry } from 'sgs3v3-shared'
 import { getGeneralById } from './generals'
 import { cardFullName } from './card-utils'
 
@@ -8,12 +8,32 @@ import { cardFullName } from './card-utils'
  *
  * v2 增加“为复盘而生”的决策记录：决策快照、候选动作及得分、最终动作、
  * 触发规则 ID、关键事件标记。随机种子在记录顶层。
+ *
+ * 复盘 ID：对局为 m{开局时间36}-{种子36}，操作/决策分别追加 .a{seq} / .d{seq}，
+ * 日志条目在 addLog 时带 matchId+seq，被操作/决策覆盖时补 actionSeq/decisionSeq，
+ * 因此界面点任意一条日志都能拼出可直接检索的 ID。
  */
 
 const STORAGE_KEY = 'sgs3v3.matchLogs.v1'
 const MAX_RECORDS = 100
 
+/** 生成对局复盘 ID；单机下一毫秒内同种子重复开局不会出现 */
+export function makeMatchId(seed: number | null, startedAt: number): string {
+    return `m${startedAt.toString(36)}-${((seed ?? 0) >>> 0).toString(36)}`
+}
+
+/** 一条日志对应的复盘 ID：优先决策，其次操作，最后退化为本局日志序号 */
+export function logReviewId(entry: LogEntry): string | null {
+    if (!entry.matchId) return null
+    if (entry.decisionSeq !== undefined) return `${entry.matchId}.d${entry.decisionSeq}`
+    if (entry.actionSeq !== undefined) return `${entry.matchId}.a${entry.actionSeq}`
+    if (entry.seq !== undefined) return `${entry.matchId}.l${entry.seq}`
+    return entry.matchId
+}
+
 export interface MatchLogAction {
+    /** 复盘 ID：{matchId}.a{seq} */
+    id: string
     seq: number
     at: number
     round: number
@@ -66,10 +86,12 @@ export interface DecisionCandidate {
 }
 
 export interface DecisionRecord {
+    /** 复盘 ID：{matchId}.d{seq} */
+    id: string
     seq: number
     at: number
     kind: 'play' | 'skill' | 'pick' | 'discard' | 'respond'
-    source: 'rule' | 'llm' | 'human'
+    source: 'rule' | 'human'
     side: 'human' | 'ai' | 'hotseat'
     actor: string
     seat: number
@@ -84,6 +106,8 @@ export interface DecisionRecord {
 
 export interface MatchLogRecord {
     version: 2
+    /** 本局复盘 ID，日志/操作/决策 ID 的前缀 */
+    id: string
     mode: string
     seed: number | null
     startedAt: number
@@ -185,11 +209,15 @@ export function detectKeyEvents(logs: string[], before: DecisionSnapshot, after:
 export function beginMatchLog(state: GameState, seed: number | null, mode: string): void {
     // 上一局若未正常结束（重开/退出），先落盘避免丢失
     if (current) finishMatchLog()
+    const startedAt = Date.now()
+    const id = makeMatchId(seed, startedAt)
+    state.matchId = id
     current = {
         version: 2,
+        id,
         mode,
         seed,
-        startedAt: Date.now(),
+        startedAt,
         generals: state.generals.map((g, i) => ({
             seat: i,
             id: g.generalId,
@@ -215,8 +243,12 @@ export function recordMatchAction(
 ): void {
     if (!current) return
     const seat = opts.seat ?? state.activeGeneralIndex
+    const seq = current.actions.length + 1
+    // 引擎日志在动作执行时写入，这里补上操作归属，界面点击即可拿到 ID
+    for (const entry of state.log.slice(logFrom)) entry.actionSeq = seq
     current.actions.push({
-        seq: current.actions.length + 1,
+        id: `${current.id}.a${seq}`,
+        seq,
         at: Date.now(),
         round: state.roundState?.roundNumber ?? 0,
         turnSerial: state.turnSerial ?? 0,
@@ -232,6 +264,8 @@ export function recordMatchAction(
 }
 
 export interface DecisionInput {
+    /** 本决策从哪条日志开始写（含），用于给日志打 decisionSeq */
+    logFrom?: number
     kind: DecisionRecord['kind']
     source: DecisionRecord['source']
     side: DecisionRecord['side']
@@ -260,8 +294,16 @@ export function recordDecision(state: GameState, input: DecisionInput): void {
     if (!current) return
     syncGenerals(state)
     const after = captureSnapshot(state)
+    const seq = current.decisions.length + 1
+    if (input.logFrom !== undefined) {
+        for (const entry of state.log.slice(input.logFrom)) {
+            // 同一步骤可能有多个决策，保留最先占用这些日志的那个
+            if (entry.decisionSeq === undefined) entry.decisionSeq = seq
+        }
+    }
     current.decisions.push({
-        seq: current.decisions.length + 1,
+        id: `${current.id}.d${seq}`,
+        seq,
         at: Date.now(),
         kind: input.kind,
         source: input.source,
@@ -325,7 +367,9 @@ export function listMatchLogs(): MatchLogRecord[] {
     try {
         const raw = store.getItem(STORAGE_KEY)
         const parsed = raw ? JSON.parse(raw) : []
-        return Array.isArray(parsed) ? parsed : []
+        if (!Array.isArray(parsed)) return []
+        // 旧版本记录没有 id：按同样的规则补出来，保证导出的历史局也能检索
+        return parsed.map((r: MatchLogRecord) => ({ ...r, id: r.id ?? makeMatchId(r.seed ?? null, r.startedAt) }))
     } catch {
         return []
     }

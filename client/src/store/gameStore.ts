@@ -33,9 +33,6 @@ interface AppState {
     // 错误信息
     error: string | null
 
-    /** 本地模型正在思考时显示的场景名（如“出牌”），空闲为 null */
-    llmThinking: string | null
-
     // Actions
     setPlayerId: (id: string | null) => void
     setNickname: (n: string) => void
@@ -49,7 +46,6 @@ interface AppState {
     setHotseat: (v: boolean) => void
     setHotseatViews: (v: { warm: GameStateClientView | null; cool: GameStateClientView | null } | null) => void
     setError: (msg: string | null) => void
-    setLlmThinking: (scene: string | null) => void
     toggleCardSelection: (cardId: string) => void
     toggleTargetSelection: (index: number) => void
     clearSelection: () => void
@@ -70,7 +66,6 @@ export const useGameStore = create<AppState>((set) => ({
     selectedCardIds: [],
     selectedTargets: [],
     error: null,
-    llmThinking: null,
 
     setPlayerId: (id) => set({ playerId: id }),
     setNickname: (n) => set({ nickname: n }),
@@ -84,7 +79,6 @@ export const useGameStore = create<AppState>((set) => ({
     setHotseat: (v) => set({ hotseat: v }),
     setHotseatViews: (v) => set({ hotseatViews: v }),
     setError: (msg) => set({ error: msg }),
-    setLlmThinking: (scene) => set({ llmThinking: scene }),
 
     toggleCardSelection: (cardId) =>
         set((s) => ({

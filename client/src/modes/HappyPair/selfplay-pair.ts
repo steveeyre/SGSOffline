@@ -1,7 +1,7 @@
 import { Faction, GamePhase, GameState } from 'sgs3v3-shared'
 import { checkAndOpenNegateWindow, negateWindowTimeout, processAutoExecutePending } from '../../engine/game-actions'
 import { checkGameOver } from '../../engine/game-state'
-import { aiAct, aiOwnsPending, aiRespond } from '../../engine/local-ai'
+import { aiAct, aiOwnsPending, aiRespond, takePlayTrace, type PlayTrace } from '../../engine/local-ai'
 import { AI_PLAYER_ID, HUMAN_PLAYER_ID } from '../../engine/local-match'
 import { resumeStalledTurn } from '../../engine/turn-manager'
 import { pickBestForPool } from './pair-draft'
@@ -13,6 +13,16 @@ export type PairSelfPlayResult = {
     steps: number
     state: GameState
     seed: number
+}
+
+/** 一步出牌决策的轻量快照，供回归/失误统计使用 */
+export interface PairSelfPlayTrace {
+    seed: number
+    step: number
+    round: number
+    faction?: Faction
+    activeIndex: number
+    play: PlayTrace
 }
 
 /** 让人类席位也按 AI 的思路选将，使自对弈能完整跑完 */
@@ -52,7 +62,12 @@ function dump(state: GameState, steps: number, seed: number): void {
 }
 
 /** 用固定种子跑一局欢乐成双全 AI 对局 */
-export function runPairSelfPlay(seed: number, humanFaction: Faction, maxSteps = 60000): PairSelfPlayResult {
+export function runPairSelfPlay(
+    seed: number,
+    humanFaction: Faction,
+    maxSteps = 60000,
+    onDecision?: (trace: PairSelfPlayTrace) => void,
+): PairSelfPlayResult {
     const state = createPairMatch(humanFaction, seed)
     finishDraft(state)
     let steps = 0
@@ -82,28 +97,42 @@ export function runPairSelfPlay(seed: number, humanFaction: Faction, maxSteps = 
             dump(state, steps, seed)
             return { ok: false, steps, state, seed }
         }
+        const play = takePlayTrace()
+        if (play && onDecision) {
+            onDecision({
+                seed,
+                step: steps,
+                round: state.roundState?.roundNumber ?? 0,
+                faction: state.activePlayerFaction,
+                activeIndex: state.activeGeneralIndex,
+                play,
+            })
+        }
     }
     dump(state, steps, seed)
     return { ok: false, steps, state, seed }
 }
 
-const games = Number(process.argv[2] ?? 5)
-let warmWins = 0
-let coolWins = 0
-let failures = 0
-let maxSteps = 0
-for (let i = 0; i < games; i++) {
-    const humanFaction = i % 2 === 0 ? Faction.COOL : Faction.WARM
-    const seed = 7000 + i
-    const result = runPairSelfPlay(seed, humanFaction)
-    maxSteps = Math.max(maxSteps, result.steps)
-    if (!result.ok) {
-        failures++
-        console.log(`game ${i} seed=${seed} STUCK as ${humanFaction} after ${result.steps} steps`)
-    } else {
-        if (result.winner === Faction.WARM) warmWins++
-        else if (result.winner === Faction.COOL) coolWins++
-        console.log(`game ${i} seed=${seed} ok winner=${result.winner} steps=${result.steps} rounds=${result.state.roundState.roundNumber} logLines=${result.state.log.length}`)
+const isCli = process.argv[1]?.includes('selfplay-pair')
+if (isCli) {
+    const games = Number(process.argv[2] ?? 5)
+    let warmWins = 0
+    let coolWins = 0
+    let failures = 0
+    let maxSteps = 0
+    for (let i = 0; i < games; i++) {
+        const humanFaction = i % 2 === 0 ? Faction.COOL : Faction.WARM
+        const seed = 7000 + i
+        const result = runPairSelfPlay(seed, humanFaction)
+        maxSteps = Math.max(maxSteps, result.steps)
+        if (!result.ok) {
+            failures++
+            console.log(`game ${i} seed=${seed} STUCK as ${humanFaction} after ${result.steps} steps`)
+        } else {
+            if (result.winner === Faction.WARM) warmWins++
+            else if (result.winner === Faction.COOL) coolWins++
+            console.log(`game ${i} seed=${seed} ok winner=${result.winner} steps=${result.steps} rounds=${result.state.roundState.roundNumber} logLines=${result.state.log.length}`)
+        }
     }
+    console.log(`\nsummary: games=${games} warmWins=${warmWins} coolWins=${coolWins} failures=${failures} maxSteps=${maxSteps}`)
 }
-console.log(`\nsummary: games=${games} warmWins=${warmWins} coolWins=${coolWins} failures=${failures} maxSteps=${maxSteps}`)

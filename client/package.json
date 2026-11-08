@@ -7,11 +7,15 @@
         "dev": "vite",
         "build": "tsc -b && vite build",
         "build:standalone": "node scripts/build-standalone.mjs",
-        "check": "node scripts/run-engine-checks.mjs && node scripts/run-engine-checks.mjs src/modes/FightTheLandlord/_checks-ddz.ts && node scripts/run-engine-checks.mjs src/modes/HappyPair/_checks-pair.ts",
+        "check": "node scripts/run-engine-checks.mjs && node scripts/run-engine-checks.mjs src/modes/FightTheLandlord/_checks-ddz.ts && node scripts/run-engine-checks.mjs src/modes/HappyPair/_checks-pair.ts && node scripts/run-engine-checks.mjs src/engine/_review-check.ts && node scripts/run-engine-checks.mjs src/engine/_position-check.ts",
         "check:selfplay": "node scripts/run-engine-checks.mjs src/engine/_selfplay.ts 20",
         "check:selfplay-pair": "node scripts/run-engine-checks.mjs src/modes/HappyPair/selfplay-pair.ts 20",
+        "check:selfplay-ddz": "node scripts/run-engine-checks.mjs src/modes/FightTheLandlord/selfplay-ddz.ts 20",
+        "check:regression": "node scripts/run-engine-checks.mjs src/engine/_regression.ts",
         "check:audit": "node scripts/run-engine-checks.mjs src/engine/_audit-checks.ts",
         "audit": "node scripts/audit/pipeline.mjs",
+        "review": "node scripts/review-match.mjs",
+        "report:position": "node scripts/run-engine-checks.mjs src/engine/_position-report.ts",
         "lint": "eslint .",
         "preview": "vite preview"
     },
@@ -20,10 +24,10 @@
         "react-dom": "^18.3.1",
         "react-router-dom": "^7.18.5",
         "sgs3v3-shared": "*",
-        "socket.io-client": "^4.8.1",
         "zustand": "^5.0.2"
     },
     "devDependencies": {
+        "@types/node": "^22.10.2",
         "@types/react": "^18.3.12",
         "@types/react-dom": "^18.3.1",
         "@vitejs/plugin-react": "^4.3.4",

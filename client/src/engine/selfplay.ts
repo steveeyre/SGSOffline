@@ -2,7 +2,7 @@ import { Faction, GamePhase, GameState } from 'sgs3v3-shared'
 import { checkGameOver } from './game-state'
 import { createLocalMatch, HUMAN_PLAYER_ID, AI_PLAYER_ID } from './local-match'
 import type { GeneralPoolVersion } from './generals'
-import { aiAct, aiOwnsPending, aiRespond } from './local-ai'
+import { aiAct, aiOwnsPending, aiRespond, takePlayTrace, type PlayTrace } from './local-ai'
 import { checkAndOpenNegateWindow, negateWindowTimeout, processAutoExecutePending } from './game-actions'
 import { resumeStalledTurn } from './turn-manager'
 
@@ -12,6 +12,16 @@ export type SelfPlayResult = {
     steps: number
     state: GameState
     seed: number
+}
+
+/** 一步出牌决策的轻量快照，供回归/失误统计使用 */
+export interface SelfPlayTrace {
+    seed: number
+    step: number
+    round: number
+    faction?: Faction
+    activeIndex: number
+    play: PlayTrace
 }
 
 /** 双方都打不动对方（如只剩对藤甲无解的主帅）时按平局收场，避免 60000 步空转 */
@@ -51,6 +61,7 @@ export function runSelfPlayGame(
     humanFaction: Faction,
     maxSteps = 60000,
     poolVersion?: GeneralPoolVersion,
+    onDecision?: (trace: SelfPlayTrace) => void,
 ): SelfPlayResult {
     const state = createLocalMatch(humanFaction, seed, false, poolVersion)
     let steps = 0
@@ -84,6 +95,17 @@ export function runSelfPlayGame(
             if (resumeStalledTurn(state)) continue
             dump(state, steps, seed)
             return { ok: false, steps, state, seed }
+        }
+        const play = takePlayTrace()
+        if (play && onDecision) {
+            onDecision({
+                seed,
+                step: steps,
+                round: state.roundState?.roundNumber ?? 0,
+                faction: state.activePlayerFaction,
+                activeIndex: state.activeGeneralIndex,
+                play,
+            })
         }
     }
     dump(state, steps, seed)

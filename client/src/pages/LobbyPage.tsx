@@ -6,7 +6,6 @@ import type { LandlordSide } from '../modes/FightTheLandlord/landlord-match'
 import { getDeckPreference, setDeckPreference, type DeckType } from '../engine/cards'
 import { getGeneralPool, getPoolPreference, setPoolPreference, type GeneralPoolVersion } from '../engine/generals'
 import { downloadMatchLogs, listMatchLogs } from '../engine/match-log'
-import { setLlmAiEnabled } from '../engine/llm-ai'
 import { GamePhase, GameMode, Faction } from 'sgs3v3-shared'
 import './LobbyPage.css'
 
@@ -26,11 +25,6 @@ export default function LobbyPage() {
     // 洛书版 / 平衡版的武将池里有军争牌的技能，只能配 156 张（军争）牌堆
     const poolForces156 = poolVersion === 'luoshu' || poolVersion === 'custom'
     const effectiveDeck: DeckType = poolForces156 ? 'tongshuai156' : deckType
-
-    // 单机对局只跑规则 AI：清掉历史版本留在本机的“本地模型”偏好
-    useEffect(() => {
-        setLlmAiEnabled(false)
-    }, [])
 
     // 已存下的偏好若与武将池冲突（例如上次选了洛书版 + 108 张），进页面就纠正
     useEffect(() => {

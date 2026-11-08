@@ -8,8 +8,8 @@ const clientDir = resolve(scriptDir, '..')
 const repoRoot = resolve(clientDir, '..')
 const distDir = join(clientDir, 'dist')
 const publicDir = join(clientDir, 'public')
-const outDir = join(repoRoot, 'release')
-const outFile = join(outDir, 'SGS3v3.html')
+const outDir = repoRoot
+const outFile = join(outDir, 'SGSOffline.html')
 
 const viteBin = [
     join(repoRoot, 'node_modules', 'vite', 'bin', 'vite.js'),

@@ -1,5 +1,5 @@
 // ============================================================
-// 三国杀 3v3 — 共享类型定义
+// 三国杀单机版 — 共享类型定义
 // ============================================================
 
 // ─────────────────────────────────────────────────────────────
@@ -438,6 +438,16 @@ export interface GeneralInstance {
     /** 伪溃（SP曹仁）：本回合视为距离1的目标座位 */
     weikuiTargetSeat?: number
     weikuiTurn?: number
+    /** 薛综【复难】：最近使用的牌与本回合序号 */
+    funanLastCard?: Card
+    funanLastCardTurn?: number
+    /** 薛综【复难】：本回合被封印、不能使用或打出的牌 */
+    funanSealedCards?: string[]
+    funanSealedTurn?: number
+    /** 薛综【诫训】：此前发动次数 */
+    jiexunUses?: number
+    /** 薛综【复难】：是否已升级 */
+    funanUpgraded?: boolean
 
     // ── 洛书版第三批（界将升级）状态位（均可选） ──
     /** 矫诏（界郭皇后）：修改一发动时的大回合号（每轮限一次） */
@@ -595,8 +605,6 @@ export interface GeneralInstance {
     moshiUseIndex?: number
     /** 陈情（SP蔡文姬）：本轮已发动的大回合号 */
     chenqingRound?: number
-    /** 定州（神鲁肃）：累计发动次数 */
-    dingzhouUses?: number
     /** 定州（神鲁肃）：本回合已发动过的回合序号 */
     dingzhouTurn?: number
     /** 逆固（孙綝）：本回合后续伤害+1的次数 */
@@ -777,6 +785,11 @@ export interface GameState {
     turnKillCounts?: number[]
     turnDeathCount?: number
 
+    /** 复盘用对局 ID，由 match-log 在开局时写入 */
+    matchId?: string
+    /** 日志序号计数（不依赖 log 数组长度，避免日志裁切后重号） */
+    logSeq?: number
+
     log: LogEntry[]
 }
 
@@ -919,6 +932,8 @@ export interface GameStateClientView {
     negateWindow?: NegateWindowClientView
     roundState: RoundState
     harvestPool?: Card[]
+    /** 本局复盘 ID，界面据此拼出可复制的日志 ID */
+    matchId?: string
     log: LogEntry[]
     isSpectator?: boolean
 }
@@ -1018,16 +1033,20 @@ export interface PendingResponse {
 export interface LogEntry {
     timestamp: number
     text: string
+    /** 对局内单调递增的日志序号；与操作/决策序号一起组成复盘 ID */
+    seq?: number
+    /** 本局复盘 ID（仅离线对局生成；在线对局缺省） */
+    matchId?: string
+    /** 产生这条日志的操作序号（对应 MatchLogRecord.actions[].seq） */
+    actionSeq?: number
+    /** 产生这条日志的决策序号（对应 MatchLogRecord.decisions[].seq） */
+    decisionSeq?: number
 }
 
 // ─────────────────────────────────────────────────────────────
-// Socket.io 事件协议
+// 玩家动作参数
 // ─────────────────────────────────────────────────────────────
 
-/* ---- C2S ---- */
-
-export interface C2S_CreateRoom { nickname: string }
-export interface C2S_JoinRoom { roomCode: string; nickname: string }
 export interface C2S_PickGeneral { generalId: string }
 export interface C2S_DeployGenerals { commander: string; flankA: string; flankB: string }
 
@@ -1079,41 +1098,3 @@ export interface C2S_NegateRespond {
     /** 出牌武将 index */
     generalIndex: number
 }
-
-/* ---- S2C ---- */
-
-export interface S2C_RoomCreated { roomCode: string; playerId: string }
-export interface S2C_RoomJoined { playerId: string }
-export interface S2C_RoomUpdate { roomCode: string; players: Player[]; phase: GamePhase }
-export interface S2C_GameStateUpdate { state: GameStateClientView }
-export interface S2C_Error { message: string }
-export interface S2C_GameOver { winnerFaction: Faction; reason: string }
-
-/* ---- 事件名 ---- */
-
-export const SocketEvents = {
-    CREATE_ROOM: 'create_room',
-    JOIN_ROOM: 'join_room',
-    REJOIN_ROOM: 'rejoin_room',
-    PICK_GENERAL: 'pick_general',
-    DEPLOY_GENERALS: 'deploy_generals',
-    CHOOSE_ACTION_UNIT: 'choose_action_unit',
-    USE_CARD: 'use_card',
-    USE_SKILL: 'use_skill',
-    RESPOND: 'respond',
-    END_TURN: 'end_turn',
-    DISCARD: 'discard',
-    YIELD_CHOICE: 'yield_choice',
-    NEGATE_RESPOND: 'negate_respond',
-    SURRENDER: 'surrender',
-    SWITCH_SPECTATE_FACTION: 'switch_spectate_faction',
-    ROOM_CREATED: 'room_created',
-    ROOM_JOINED: 'room_joined',
-    SPECTATE_JOIN: 'spectate_join',
-    REJOIN_OK: 'rejoin_ok',
-    REJOIN_FAIL: 'rejoin_fail',
-    ROOM_UPDATE: 'room_update',
-    GAME_STATE_UPDATE: 'game_state_update',
-    GAME_OVER: 'game_over',
-    ERROR: 'error',
-} as const
