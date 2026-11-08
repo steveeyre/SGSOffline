@@ -292,6 +292,39 @@ export function pickDanshouChoice(
 }
 
 /**
+ * 禁酒（界高顺）：自己的【酒】一律视为点数为 K 的【杀】，且必须指定目标。
+ *
+ * 引擎在 handleBasicCard 的 WINE 分支里先判禁酒再判「已饮过酒」，所以持有禁酒时
+ * 按【酒】喝掉必然报「请选择【杀】的目标」。自对弈 80 局里有 2 次整回合因此空过。
+ */
+export function jinjiuTurnsWineIntoSlash(general: GeneralView): boolean {
+    return hasSkillOf(general, 'gaoshun_jinjiu')
+}
+
+/**
+ * 矫诏（界郭皇后）：被声明的牌仍留在手里，但只能通过矫诏本身打出。
+ *
+ * 引擎在 handleUseCardImpl 里对 jiaozhaoCardId 命中的牌先做矫诏分支，
+ * 且该分支拒绝以自己为目标。若 AI 的常规出牌表把这牌当装备/锦囊打，
+ * 就会撞上「【矫诏】不能指定自己为目标」而整张作废（自对弈 80 局 13 次）。
+ */
+export function isJiaozhaoSealed(general: GeneralView, cardId: string): boolean {
+    return !!general.jiaozhaoAs && general.jiaozhaoCardId === cardId
+}
+
+/**
+ * 惴恐（界伏皇后）/ 龙临（闪赵云）：本回合或本阶段使用牌只能指定自己为目标。
+ *
+ * 引擎在 handleUseCardImpl 里对二者一视同仁（useOnlySelfTurn 按回合计、
+ * onlySelfTargetPhase 按阶段计），任何指向他人的牌都会被整张拒绝。
+ * AI 此前照常给杀、偷、拆、延时锦囊打分，被拒后该阶段直接空过。
+ */
+export function selfTargetOnly(state: GameState, general: GeneralView): boolean {
+    if (general.onlySelfTargetPhase) return true
+    return general.useOnlySelfTurn !== undefined && general.useOnlySelfTurn === state.turnSerial
+}
+
+/**
  * 将驰（界曹彰）：摸一张牌（杀次数 -1、杀不计手牌上限）或重铸一张牌
  * （杀无距离限制、次数 +1）。手里没有【杀】时重铸换来的距离用不上，摸牌更实在。
  */

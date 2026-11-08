@@ -40,7 +40,7 @@ import { dodgeHoldValue, delayedSuccessChance, negateRisk, predictAoe, predictDu
 import { enemyPlans, guessHand, handDodgeChance, incomingDamage, knownSuits } from './ai-memory'
 import { beginDecision, endDecision } from './ai-audit'
 import { applyChoicePatches, applyPatchToOptions, experimentOn, forcedPlayRule, hasHookRules, noteExperiment, noteThresholdDecision, pickBestChoice, thresholdFor, type Choice } from './ai-variant'
-import { bestStealSlot, duanliangTargetLegal, pickBanghuaiChoice, pickDanshouChoice, pickJiangchiChoice, pickJiefanTarget, pickQingnangPlan, pickYijiReceiver, rendeOpportunity, stealableEquipSlots } from './general-playbook'
+import { bestStealSlot, duanliangTargetLegal, isJiaozhaoSealed, jinjiuTurnsWineIntoSlash, pickBanghuaiChoice, pickDanshouChoice, pickJiangchiChoice, pickJiefanTarget, pickQingnangPlan, pickYijiReceiver, rendeOpportunity, selfTargetOnly, stealableEquipSlots } from './general-playbook'
 
 const SLASH_NAMES: string[] = [BasicCardName.ATTACK, BasicCardName.FIRE_SLASH, BasicCardName.THUNDER_SLASH]
 
@@ -2884,14 +2884,36 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     const active = getActiveGeneral(state)
     if (!active || active.playerId !== playerId) return false
     if (state.turnPhase !== TurnPhase.ACTION) return false
-    const hand = active.hand ?? []
+    // 矫诏（界郭皇后）声明过的牌仍留在手里，但只能通过矫诏本身打出：引擎会先拦到矫诏
+    // 分支，而该分支拒绝以自己为目标，装备/无中生有这类候选必然整张作废。
+    const hand = (active.hand ?? []).filter((c) => !isJiaozhaoSealed(active, c.id))
     const self = state.activeGeneralIndex
+    // 惴恐 / 龙临：本回合（阶段）只能指定自己为目标。指向他人的牌与技能会被引擎
+    // 整张拒绝，此时直接当作执行失败，让候选表继续尝试后面的合法动作，而不是空过。
+    const selfOnly = selfTargetOnly(state, active)
+    const targetsOthers = (indices: number[]): boolean =>
+        indices.some((i) => i !== self)
+    // 群体锦囊的目标由引擎内部展开，targetIndices 为空也会被拒；但【铁索连环】重铸
+    // 不指定任何目标，引擎放行，不能一并拦掉。
+    const AOE_NAMES: string[] = [
+        TrickCardName.BARBARIANS, TrickCardName.ARROWS,
+        TrickCardName.PEACH_GARDEN, TrickCardName.HARVEST, TrickCardName.IRON_CHAIN,
+    ]
+    const touchesOthers = (card: Card, targetIndices: number[], extra?: Record<string, unknown>): boolean => {
+        if (targetsOthers(targetIndices)) return true
+        if (!AOE_NAMES.includes(card.name)) return false
+        return !(card.name === TrickCardName.IRON_CHAIN && extra?.recast === true)
+    }
 
-    const use = (card: Card, targetIndices: number[], extra?: Record<string, unknown>): boolean =>
-        handleUseCard(state, playerId, { cardId: card.id, targetIndices, extra } as any) === undefined
+    const use = (card: Card, targetIndices: number[], extra?: Record<string, unknown>): boolean => {
+        if (selfOnly && touchesOthers(card, targetIndices, extra)) return false
+        return handleUseCard(state, playerId, { cardId: card.id, targetIndices, extra } as any) === undefined
+    }
 
-    const useSkill = (skillId: string, targetIndices: number[] = [], cardIds: string[] = []): boolean =>
-        handleUseSkill(state, playerId, { skillId, targetIndices, cardIds }) === undefined
+    const useSkill = (skillId: string, targetIndices: number[] = [], cardIds: string[] = []): boolean => {
+        if (selfOnly && targetsOthers(targetIndices)) return false
+        return handleUseSkill(state, playerId, { skillId, targetIndices, cardIds }) === undefined
+    }
 
     // 战略层：本回合的集火目标与对手意图（只用公开信息）
     const strategy = analyzeStrategy(state, playerId)
@@ -2939,7 +2961,9 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     }
 
     const slashesInHand = hand.filter(isSlash)
-    const wineCard = hand.find((c) => c.name === BasicCardName.WINE)
+    // 濒死时的【酒】救不了命，且禁酒持有者的酒只能当杀打（且必须选目标），
+    // 若当作「喝一口酒加伤」直接出，引擎会报「请选择【杀】的目标」并整回合空过。
+    const wineCard = jinjiuTurnsWineIntoSlash(active) ? undefined : hand.find((c) => c.name === BasicCardName.WINE)
     // 用配额判定而不是「首张杀」：连弩第 5 张、天义落败后的杀都会被引擎拒绝，
     // 一次被拒就整回合空过（见 slashQuotaThisTurn 的注释）
     const canAttack = state.attackUsedThisTurn < slashQuotaThisTurn(state, active)
@@ -3223,7 +3247,7 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     }
     // 矫诏：已声明的牌要打出去，否则这次发动就白费了
     if (active.jiaozhaoAs && active.jiaozhaoCardId) {
-        const jzShown = hand.find((c) => c.id === active.jiaozhaoCardId)
+        const jzShown = active.hand.find((c) => c.id === active.jiaozhaoCardId)
         const jzFoe = inRangeFoes[0]
         if (jzShown) {
             const jzName = active.jiaozhaoAs
