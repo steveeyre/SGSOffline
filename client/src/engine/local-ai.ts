@@ -2868,6 +2868,17 @@ function slashQuotaThisTurn(state: GameState, active: GeneralView): number {
     return Math.max(0, max)
 }
 
+/**
+ * 牌堆与弃牌堆里还剩多少张牌可摸。
+ *
+ * 摸牌类动作会先把自身放进弃牌堆再摸牌；两堆都空时 ensureDeck 会把它洗回牌堆
+ * 并当场摸回手里 —— 净收益为 0，却仍按“摸到 N 张”估值，AI 于是在同一出牌阶段
+ * 里无限重复（seed 3370 的【无中生有】循环了 2.8 万次，一局拖到 60000 步）。
+ */
+function spareDraws(state: GameState): number {
+    return state.deck.length + state.discard.length
+}
+
 /** 出牌阶段执行一个动作；返回 false 表示无牌可出 */
 function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boolean {
     const active = getActiveGeneral(state)
@@ -3011,7 +3022,9 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
         }
     }
     const drawTwo = hand.find((c) => c.name === TrickCardName.DRAW_TWO)
-    if (drawTwo) offer('draw_two', BASE_SCORE.draw_two, ['value'], () => use(drawTwo, [self]))
+    if (drawTwo && spareDraws(state) > 0) {
+        offer('draw_two', BASE_SCORE.draw_two, ['value'], () => use(drawTwo, [self]))
+    }
 
     // 铁索：先确认过属性伤害才连；没有属性伤害时重铸本身就是过一张未知牌
     const ironChain = hand.find((c) => c.name === TrickCardName.IRON_CHAIN)
@@ -3030,7 +3043,7 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
             // 铁索在属性伤害前：两人传导的溢出才是主要的 +40
             offer('iron_chain', BASE_SCORE.iron_chain_ready + 40 + tempo.burst, ['burst'],
                 () => use(ironChain, unchainedFoes.slice(0, 2).map(({ index }) => index)))
-        } else {
+        } else if (spareDraws(state) > 0) {
             // 没有属性伤害（或连不到两人）时重铸本身就是过一张未知牌，
             // 重铸不消耗出杀次数，所以在出杀之前先过掉
             offer('iron_chain_recast', BASE_SCORE.iron_chain_recast +
