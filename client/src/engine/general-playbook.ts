@@ -212,7 +212,7 @@ export function duanliangTargetLegal(active: GeneralView, target: GeneralView, d
     if (!target.alive || target.abolishedJudgeZone) return false
     if (target.judgeZone.some((c) => c.name === TrickCardName.SUPPLY_SHORTAGE)) return false
     if (hasSkillOf(active, 'huangyueying_qicai')) return true
-    if (active.generalId === 'xuhuang_jie' && target.hand.length >= active.hand.length) return true
+    if (hasSkillOf(active, 'xuhuang_jie_duanliang') && target.hand.length >= active.hand.length) return true
     return distance <= 1
 }
 
@@ -322,6 +322,19 @@ export function isJiaozhaoSealed(general: GeneralView, cardId: string): boolean 
 export function selfTargetOnly(state: GameState, general: GeneralView): boolean {
     if (general.onlySelfTargetPhase) return true
     return general.useOnlySelfTurn !== undefined && general.useOnlySelfTurn === state.turnSerial
+}
+
+/**
+ * 拒战（严颜）：本回合不能对指定角色使用牌。
+ *
+ * 引擎在 handleUseCardImpl 里比对 general.forbiddenTargetIndex 与
+ * forbiddenTargetTurn（记录的是"当前行动者"），命中且目标含该角色就整张拒绝。
+ * 只拦显式指定目标的牌：群体锦囊的 targetIndices 为空，引擎不会触发这条。
+ */
+export function juzhanForbiddenIndex(state: GameState, general: GeneralView): number | undefined {
+    if (general.forbiddenTargetIndex === undefined) return undefined
+    if (general.forbiddenTargetTurn !== state.activeGeneralIndex) return undefined
+    return general.forbiddenTargetIndex
 }
 
 /**

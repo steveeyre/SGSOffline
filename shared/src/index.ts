@@ -35,6 +35,9 @@ export enum GameMode {
     HUANLE_SHUANG = 'huanle_shuang',
 }
 
+/** 开局技能规则：limited=同一武将技能/武器效果每回合至多发动五次，unlimited=无限制 */
+export type SkillLimitRule = 'limited' | 'unlimited'
+
 /** 回合阶段 */
 export enum TurnPhase {
     TURN_START = 'turn_start',
@@ -180,6 +183,10 @@ export interface Card {
     originalCategory?: CardCategory
     /** 虚视为的牌（如神速/长标），不进入弃牌堆 */
     virtual?: boolean
+    /** 进入弃牌堆的回合序号（俭衣：本回合因弃置置入的防具牌） */
+    discardTurn?: number
+    /** 因装备替换进入弃牌堆的回合序号：不算作“弃置” */
+    replacedEquipTurn?: number
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -218,6 +225,8 @@ export interface GeneralInstance {
     generalId: string
     playerId: string
     faction: Faction
+    /** 势力（魏/蜀/吴/群）：默认取武将定义，可被技能改写 */
+    kingdomOverride?: 'wei' | 'shu' | 'wu' | 'qun'
     seatRole: SeatRole
     hp: number
     maxHp: number
@@ -235,12 +244,22 @@ export interface GeneralInstance {
     loyaltyCard?: Card
     /** 本回合已使用的技能（限一次的技能追踪） */
     skillsUsedThisTurn: string[]
+    /** 本回合各技能/武器效果的发动次数（开局“限五次”规则用） */
+    skillUseCountsThisTurn?: Record<string, number>
+    /** 弘援（诸葛瑾）：本阶段已触发过的阶段标识 */
+    hongyuanPhaseKey?: string
+    /** 弘援（诸葛瑾）：待依次交牌的目标下标 */
+    hongyuanGiveQueue?: number[]
     /** 觉醒后获得的额外技能 ID */
     acquiredSkills: string[]
     /** 仁德本回合已给出的牌数 */
     rendeGivenThisTurn: number
     /** 仁德本回合是否已回复过体力 */
     rendeHealedThisTurn: boolean
+    /** 仁德（界刘备）：本阶段已获得过“仁德”牌的角色下标 */
+    rendeReceivedThisPhase?: number[]
+    /** 仁德（界刘备）：本阶段第二张“仁德”牌的基本牌奖励是否已触发 */
+    rendeSecondGivenThisTurn?: boolean
     /** 铁索连环：是否横置 */
     chained: boolean
     /** 本回合是否已饮酒（酒杀加伤标记） */
@@ -312,10 +331,17 @@ export interface GeneralInstance {
     qiangxiTargetsPhase?: number[]
     /** 本回合受到的伤害次数（狞恶） */
     damageTimesThisTurn?: number
-    /** 点虎（黄权）：选定的其他角色下标 */
+    /** 点虎（黄权）：拥有“筹进”标记的角色下标 */
     dianhuTargetIndex?: number
     /** 点虎（黄权）：是否已询问过选择目标 */
     dianhuPrompted?: boolean
+    /** 点虎（黄权）：本回合已因“筹进”摸牌的次数与所属回合序号 */
+    dianhuDrawCount?: number
+    dianhuCountTurn?: number
+    /** 战神（吕布-竞）：已获得的效果编号（1~4） */
+    zhanshenEffects?: number[]
+    /** 奋威（甘宁-竞）：最近一次发动所在轮次 */
+    fenweiRound?: number
 
     // ── 洛书版新武将状态位（均可选） ──
     /** 战绝（刘谌）：本阶段以此法摸牌数，达到 2 后本阶段失效 */
@@ -324,6 +350,9 @@ export interface GeneralInstance {
     qimouDistanceReduce?: number
     /** 奇谋（魏延）：本回合【杀】次数上限加成 */
     qimouSlashBonus?: number
+    /** 螽集（张曼成）：本回合发动次数与所属回合序号 */
+    zhongjiUses?: number
+    zhongjiTurn?: number
 
     // ── 洛书版第二批武将状态位（均可选） ──
     /** 怀橘（陆绩）：持有“橘”标记数 */
@@ -342,8 +371,68 @@ export interface GeneralInstance {
     usedCardCategories?: string[]
     /** 活墨（钟繇）：本回合已使用过的基本牌牌名 */
     basicUsedThisTurn?: string[]
+    /** 燃己（谋姜维）：本回合使用过牌的阶段键 */
+    usedCardPhases?: string[]
+    /** 燃己（谋姜维）：不能回复体力，直到杀死角色 */
+    noRecoverUntilKill?: boolean
+    /** 晖云（胡班）：各选项最近一次使用的轮次 */
+    huiyunUsedRound?: Record<string, number>
+    /** 晖云（胡班）：以晖云使用【火攻】的回合序号 */
+    huiyunTurn?: number
+    /** 晖云（胡班）：【火攻】目标下标 */
+    huiyunTargetIndex?: number
+    /** 晖云（胡班）：本次【火攻】由晖云转化，等待结算后选择 */
+    huiyunPending?: boolean
+    /** 晖云（胡班）：目标展示的牌 id */
+    huiyunShownCardId?: string
+    /** 评荐（许劭）：已获得过的技能 ID */
+    pingjianGained?: string[]
+    /** 评荐（许劭）：本次获得技能的回合（回合结束时移除） */
+    pingjianTurn?: number
+    /** 评荐（许劭）：本次获得的技能 ID（时机结束时移除） */
+    pingjianGranted?: string
+    /** 评荐（许劭）：本次技能的时机（出牌阶段末端 / 回合结束 / 伤害结算完成） */
+    pingjianTiming?: 'action' | 'end' | 'damage'
+    /** 困奋（谋姜维）：已发动过的回合序号 */
+    kunfenTurn?: number
     /** 翻面：true 表示背面朝上（下个回合跳过） */
     flipped?: boolean
+    /** 护甲：受到伤害时先抵扣，完全抵扣则不视为受到伤害（谋于禁/神甘宁等） */
+    armorPoints?: number
+    /** 手牌上限的永久修正（负数为减，如流矢/魄袭；回合开始不清零） */
+    handLimitPenalty?: number
+    /** 狭援（谋于禁）：本轮已发动的大回合号 */
+    xiayuanRound?: number
+    /** 博图（界吕蒙）：本轮已发动次数与大回合号 */
+    botuUses?: number
+    botuRound?: number
+    /** 回合开始时弃牌堆的牌 id 快照（博图判断本回合置入弃牌堆的花色） */
+    discardBaseline?: string[]
+    /** 好施（界鲁肃）：获得牌的受益者下标，直到鲁肃下个回合开始前其可在鲁肃成为目标后交牌 */
+    haoshiGuardReceiver?: number
+    /** 缔盟（界鲁肃）：出牌阶段结束时须弃置的牌数 */
+    dimengDebt?: number
+    /** 和衷（费祎）：展示牌的点数与下一张普通锦囊额外结算的方向 */
+    hezhongValue?: number
+    hezhongMode?: 'greater' | 'less'
+    /** 督粮（李严）：下个回合摸牌阶段多摸一张牌 */
+    duliangDrawBonus?: boolean
+    /** 展骥（SP庞统）：正在由展骥自身摸牌，避免递归 */
+    zhanjiDrawing?: boolean
+    /** 巧说（界简雍）：拼点赢后，本回合下一张基本牌可增加一个目标 */
+    qiaoshuoWin?: boolean
+    /** 巧说（界简雍）：本回合不能使用锦囊牌的回合序号 */
+    cannotUseTrickTurn?: number
+    /** 本次使用的群体锦囊要取消的目标下标 */
+    aoeExclude?: number[]
+    /** 流矢（曹性）：本次视为使用的【杀】的虚拟牌 id */
+    liushiAttackId?: string
+    /** 流矢（曹性）：因流矢累计减少的手牌上限（斩腕恢复用） */
+    liushiPenalty?: number
+    /** 本回合获得的手牌数（董承·承诏） */
+    gainedCardsThisTurn?: number
+    /** 劫营（神甘宁）：是否持有“营”标记 */
+    yingMark?: boolean
     /** 本回合【杀】可指定的目标数加成（天义/陷阵） */
     extraSlashTargets?: number
     /** 本回合【杀】无距离限制（天义/诈降/长标） */
@@ -533,8 +622,8 @@ export interface GeneralInstance {
     onlySelfTargetPhase?: boolean
     /** 酒池（界董卓）：本回合“崩坏”失效的回合序号 */
     banghuaiDisabledTurn?: number
-    /** 纵玄（界虞翻）：上家弃置已触发过的回合序号 */
-    zongxuanUpstreamTurn?: number
+    /** 纵玄（界虞翻）：各角色本回合第一次因弃置触发过纵玄时的回合序号（座位下标 → 回合序号） */
+    zongxuanAskedTurns?: Record<number, number>
     /** 宽释（阚泽）：施加者座位下标 */
     kuanshiSourceIndex?: number
     /** 宽释（阚泽）：跳过下个摸牌阶段 */
@@ -559,6 +648,26 @@ export interface GeneralInstance {
     yonglueTurn?: number
     /** 励战（曹仁）：结束阶段发动过的回合序号 */
     lizhanTurn?: number
+
+    // ── 谋庞统 / 界吕布 / 刘焉 / 谯周 ──
+    /** 涅槃（谋庞统）：已修改过【连环】 */
+    lianhuanModified?: boolean
+    /** 连环（谋庞统）：以此法使用【铁索连环】的阶段键（每阶段限一次） */
+    lianhuanUsedPhase?: string
+    /** 星卜（谯周）：下个回合按红牌数执行的效果 */
+    xingbuMode?: 'three' | 'two' | 'low'
+    /** 星卜（谯周）：摸牌阶段额外摸牌 */
+    drawPhaseBonus?: number
+    /** 星卜（谯周）：跳过弃牌阶段 */
+    skipDiscardPhase?: boolean
+    /** 星卜（谯周）：准备阶段须弃置一张手牌 */
+    prepDiscardPending?: number
+    /** 立牧（刘焉）：本阶段已以此法使用过【乐不思蜀】 */
+    limuUsedPhase?: boolean
+    /** 图射（刘焉）：本回合已发动过 */
+    tusheTurn?: number
+    /** 利驭（界吕布）：本次【杀】的伤害来源与目标 */
+    liyuTurn?: number
 
     // ── 洛书版第九批（新增武将）状态位（均可选） ──
     /** 笔伐（陈琳）：置于该角色武将牌上的“笔伐”牌 */
@@ -621,6 +730,113 @@ export interface GeneralInstance {
     extraActionPhase?: boolean
     /** 天妒（戏志才）：判定牌来源标记 */
     tianbianJudge?: boolean
+
+    // ── 洛书版第十批（2026-11 武将池更新）状态位（均可选） ──
+    /** 抚蛮（马忠）：本阶段已指定的角色下标 */
+    fumanTargetsPhase?: number[]
+    /** 抚蛮（马忠）：给出的牌 id 与所属回合序号 */
+    fumanCardId?: string
+    fumanTurn?: number
+    /** 抚蛮（马忠）：以此牌造成伤害时需发牌的马忠下标 */
+    fumanDamageOwner?: number
+    /** 威抚（牵招）：本回合获得加成的牌类别与所属回合序号 */
+    weifuCategory?: string
+    weifuTurn?: number
+    /** 剑合（张华）：本阶段已指定的角色下标 */
+    jianheTargetsPhase?: number[]
+    /** 移荣（族吴苋）：本阶段已发动次数 */
+    yirongUsesPhase?: number
+    /** 自固（势孙綝）：本回合已发动 */
+    ziguTurn?: number
+    /** 强峙（郑浑）：本回合已发动 */
+    qiangzhiTurn?: number
+    /** 款塞（牵招）：本回合已发动 */
+    kuansaiTurn?: number
+    /** 辟田（郑浑）：累计的手牌上限加值 */
+    pitianBonus?: number
+    /** 带砺（罗宪）：被展示而标记的手牌 id */
+    dailiCardIds?: string[]
+    /** 因技能公开亮出、对所有角色可见的手牌 id（火攻等） */
+    revealedCardIds?: string[]
+    /** 倾袭（界曹休）：本次【杀】获得伤害+1的目标下标 */
+    qingxiBonusTargets?: number[]
+    /** 倾袭（界曹休）：上述标记绑定的牌 id */
+    qingxiBonusCardId?: string
+    /** 苟得（孟达）：本回合已执行项的位掩码与回合序号 */
+    goudeMask?: number
+    goudeTurn?: number
+    /** 泥首（屈晃）：已使用交换选项的阶段键（回合序号:阶段） */
+    nishouSwapPhase?: string
+    /** 泥首（屈晃）：待本阶段结束时交换手牌的阶段键 */
+    nishouPendingSwap?: string
+    /** 切谏（屈晃）：本轮不能对其发动的角色下标与大回合号 */
+    qiejianForbidden?: number[]
+    qiejianRound?: number
+    /** 穿屋（张华）：本回合失去的技能与回合序号 */
+    chuanwuLost?: string[]
+    chuanwuTurn?: number
+    /** 慨公（骥李典）：本回合已发动 */
+    kaigongTurn?: number
+    /** 作威（势孙綝）：本回合已发动摸牌项的回合序号 */
+    zuoweiDrawTurn?: number
+    /** 评荐（许劭）：已获得过的技能 id、本次获得技能与失效阶段 */
+    pingjianSkills?: string[]
+    pingjianSkill?: string
+    pingjianPhase?: string
+    /** 逐日（谋姜维）：阶段开始时的手牌数、阶段键与本回合所属回合序号 */
+    zhuriPhaseHand?: number
+    zhuriPhaseKey?: string
+    zhuriTurn?: number
+    /** 燃己（谋姜维）：不能回复体力直到杀死角色 */
+    ranjiNoHeal?: boolean
+    /** 贵相（族吴苋）：本回合已改写的阶段数 */
+    guixiangPhases?: number
+    guixiangTurn?: number
+
+    // ── 洛书版第十一批（2026-11 武将池更新）状态位（均可选） ──
+    /** 谦雅（界孙乾）：本阶段已因谦雅摸牌的阶段键（回合序号:阶段） */
+    qianyaDrawPhase?: string
+    /** 青囊（界华佗）：本回合已使用过的目标下标 */
+    qingnangTargets?: number[]
+    qingnangTurn?: number
+    /** 青囊（界华佗）：上一次弃置的牌为红色，本阶段可再次发动 */
+    qingnangRepeat?: boolean
+    /** 镇卫（文聘）：被令无效、待当前回合结束时归还给使用者的牌 */
+    zhenweiRegain?: Card[]
+
+    // ── 洛书池剩余技能状态位（均可选） ──
+    /** 卫境（鲁芝）：本技能最近发动的大回合号（每轮限一次） */
+    weijingRound?: number
+    /** 义绝（界关羽）：非锁定技失效的回合序号 */
+    yijueNoSkillTurn?: number
+    /** 义绝（界关羽）：♥【杀】伤害+1 的回合序号 */
+    yijueHeartBonusTurn?: number
+    /** 义绝（界关羽）：♥【杀】伤害+1 的目标角色下标 */
+    yijueHeartTarget?: number
+    /** 修好（邓芝）：本技能最近发动的回合序号 */
+    xiuhaoTurn?: number
+    /** 本回合获得的牌的 id（自书/素俭） */
+    gainedCardIdsThisTurn?: string[]
+    /** 掠城（张曼成）：被标记的【杀】id */
+    luechengSlashIds?: string[]
+    /** 掠城（张曼成）：目标角色下标 */
+    luechengTarget?: number
+    /** 掠城（张曼成）：标记所属的回合序号 */
+    luechengTurn?: number
+    /** 蛮王（SP孟获）：本阶段已执行的项数 */
+    manwangStep?: number
+    /** 叛侵（SP孟获）：是否拥有【叛侵】 */
+    panqinOwned?: boolean
+    /** 叛侵（SP孟获）：本阶段弃置的牌 id */
+    panqinDiscardIds?: string[]
+    /** 叛侵（SP孟获）：上述记录所属的阶段标识 */
+    panqinPhaseKey?: string
+    /** 叛侵（SP孟获）：已询问过【叛侵】的阶段 */
+    panqinAskedPhase?: string
+    /** 自书（马良）：正在由自书摸牌，避免递归 */
+    zishuDrawing?: boolean
+    /** 佐练（蔡瑁）：本阶段已发动次数 */
+    zuolianUsesPhase?: number
 }
 
 export interface Player {
@@ -663,12 +879,28 @@ export interface DeployState {
     coolDeployed: boolean
 }
 
+/** 奇技候选：从洛书池武将技能中随机抽出的额外技能 */
+export interface OddityOption {
+    /** 技能 id，选定后写入武将的 acquiredSkills */
+    skillId: string
+    skillName: string
+    description: string
+    type: SkillType
+    /** 技能原属武将，仅用于界面展示 */
+    sourceGeneralId: string
+    sourceGeneralName: string
+}
+
 /** 斗地主选将态：三池互不重复，地主 6 选 1、农民各 5 选 1，同时进行 */
 export interface LandlordPickState {
     /** [地主池, 农民一池, 农民二池] */
     pools: GeneralDefinition[][]
     /** 各池已选武将 id，null 表示还没选 */
     picked: (string | null)[]
+    /** 奇技模式：各席位的奇技候选，未开启奇技时为 undefined */
+    oddities?: OddityOption[][]
+    /** 奇技模式：各席位已选奇技的 skillId，null 表示还没选 */
+    oddityPicked?: (string | null)[]
 }
 
 /** 欢乐成双选将态：四个座位各一个池，同时进行 */
@@ -677,6 +909,10 @@ export interface PairPickState {
     pools: GeneralDefinition[][]
     /** 各池已选武将 id，null 表示还没选 */
     picked: (string | null)[]
+    /** 奇技模式：各座位的奇技候选，未开启奇技时为 undefined */
+    oddities?: OddityOption[][]
+    /** 奇技模式：各座位已选奇技的 skillId，null 表示还没选 */
+    oddityPicked?: (string | null)[]
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -715,6 +951,12 @@ export interface GameState {
     phase: GamePhase
     /** 对局模式，缺省为统率三军 */
     mode?: GameMode
+    /** 奇技模式：选将时每名角色额外获得 3 个奇技候选，须一并选定 */
+    oddityMode?: boolean
+    /** 开局技能规则：缺省按无限制处理 */
+    skillLimitRule?: SkillLimitRule
+    /** 武器牌加强：开启后七件武器按加强版规则结算 */
+    weaponEnhance?: boolean
     /** 斗地主选将态 */
     landlordPick?: LandlordPickState
     /** 斗地主：本地玩家执哪一方 */
@@ -779,8 +1021,14 @@ export interface GameState {
     }
     /** 放权：本回合结束后由该下标角色执行额外回合 */
     fangquanFor?: number
+    /** 额外回合的技能来源（放权/博图等），仅用于日志 */
+    fangquanLabel?: string
     /** 回合序号（每回合开始自增，用于“每回合限一次”判定） */
     turnSerial?: number
+    /** 轮次序号（每名存活角色各行动一次记为一轮，用于“每轮限一次”） */
+    roundSerial?: number
+    /** 本轮已行动过的角色下标 */
+    roundSeen?: number[]
     /** 本回合各角色击杀数（按下标）与死亡总数（戚乱） */
     turnKillCounts?: number[]
     turnDeathCount?: number
@@ -789,8 +1037,38 @@ export interface GameState {
     matchId?: string
     /** 日志序号计数（不依赖 log 数组长度，避免日志裁切后重号） */
     logSeq?: number
+    /** 动效事件序号计数 */
+    fxSeq?: number
 
     log: LogEntry[]
+    /** 最近的动效事件（只保留尾部若干条） */
+    fx?: FxEvent[]
+    /** 本局累计战绩（赛后统计） */
+    battleStats?: BattleStats
+}
+
+/** 单方（暖/冷）的本局累计战绩 */
+export interface BattleSideStats {
+    /** 主动/被动技能发动次数 */
+    skillUses: number
+    /** 补牌（从牌堆摸到手的张数） */
+    draws: number
+    /** 造成的总伤害 */
+    damageDealt: number
+    /** 对敌方造成的伤害 */
+    damageToEnemy: number
+    /** 击杀数 */
+    kills: number
+    /** 承受的伤害 */
+    damageTaken: number
+    /** 回复的体力 */
+    healing: number
+}
+
+/** 本局双方累计战绩：赛后统计页直接读取 */
+export interface BattleStats {
+    warm: BattleSideStats
+    cool: BattleSideStats
 }
 
 /** 无懈可击窗口（服务端完整版） */
@@ -839,6 +1117,8 @@ export interface GeneralClientView {
     maxHp: number
     handCount: number
     hand?: Card[]
+    /** 因技能公开亮出、所有角色可见的手牌（火攻等，UI 直接展示） */
+    revealedCards?: Card[]
     equip: EquipZone
     judgeZone: Card[]
     alive: boolean
@@ -875,6 +1155,8 @@ export interface GeneralClientView {
     jueMarks?: number
     /** 翻面状态（UI 展示用） */
     flipped?: boolean
+    /** 护甲点数（UI 展示用） */
+    armorPoints?: number
     /** 武烈：“烈”标记数（UI 展示用） */
     lieMarks?: number
     /** 成略（许攸）：true = 阳 */
@@ -911,6 +1193,8 @@ export interface GameStateClientView {
     roomId: string
     phase: GamePhase
     mode?: GameMode
+    /** 奇技模式：选将页据此显示奇技候选与确认按钮 */
+    oddityMode?: boolean
     landlordPick?: LandlordPickState
     landlordHumanSide?: 'landlord' | 'farmers'
     pairPick?: PairPickState
@@ -927,6 +1211,8 @@ export interface GameStateClientView {
     activePlayerFaction: Faction
     currentActionUnit?: ActionUnitType
     activeGeneralIndex: number
+    /** 当前回合序号；界面用于判断“同一回合内的连续击杀” */
+    turnSerial?: number
     attackUsedThisTurn: number
     pendingResponse?: PendingResponse
     negateWindow?: NegateWindowClientView
@@ -935,6 +1221,8 @@ export interface GameStateClientView {
     /** 本局复盘 ID，界面据此拼出可复制的日志 ID */
     matchId?: string
     log: LogEntry[]
+    /** 最近的动效事件，界面据此直接播放，不必解析日志 */
+    fx?: FxEvent[]
     isSpectator?: boolean
 }
 
@@ -1012,6 +1300,7 @@ export enum ResponseType {
     SKILL_CHOOSE_TARGET = 'skill_choose_target',            // 通用：技能选择目标（谦雅/旋风/弘援等）
     SKILL_GIVE_CARDS = 'skill_give_cards',                  // 通用：选择交给指定角色的手牌
     SKILL_PICK_CARD = 'skill_pick_card',                    // 通用：选择自己的一张牌（弃置/置于武将牌上）
+    SKILL_SHANGYI_PICK = 'skill_shangyi_pick',              // 尚义(蒋钦)：观看目标手牌并选一张获得
     // ── 斗地主 ──
     LANDLORD_REWARD = 'landlord_reward',                    // 农民阵亡奖励：存活农民二选一（摸2张 / 回复1点体力）
 }
@@ -1029,6 +1318,25 @@ export interface PendingResponse {
 // ─────────────────────────────────────────────────────────────
 // 日志
 // ─────────────────────────────────────────────────────────────
+
+/** 表现层结构化事件：引擎在关键动作点发出，界面据此播放动效，不再依赖日志文本解析 */
+export type FxEventKind = 'use' | 'skill' | 'damage' | 'death'
+
+export interface FxEvent {
+    /** 单调递增序号，界面按它消费 */
+    seq: number
+    kind: FxEventKind
+    /** 发起者座位下标 */
+    actor?: number
+    /** 目标座位下标 */
+    targets?: number[]
+    /** 使用的牌名（kind === 'use'） */
+    cardName?: string
+    /** 技能 id（kind === 'skill'） */
+    skillName?: string
+    /** 伤害值（kind === 'damage'） */
+    amount?: number
+}
 
 export interface LogEntry {
     timestamp: number

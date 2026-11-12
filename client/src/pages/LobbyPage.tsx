@@ -1,13 +1,49 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useGameStore } from '../store/gameStore'
-import { startLocalHotseatMatch, startLocalLandlordMatch, startLocalMatch, startLocalPairMatch } from '../engine/local-dispatch'
+import { getResumeInfo, resumeLocalMatch, startLocalHotseatMatch, startLocalLandlordMatch, startLocalMatch, startLocalPairMatch, type ResumeInfo } from '../engine/local-dispatch'
 import type { LandlordSide } from '../modes/FightTheLandlord/landlord-match'
 import { getDeckPreference, setDeckPreference, type DeckType } from '../engine/cards'
 import { getGeneralPool, getPoolPreference, setPoolPreference, type GeneralPoolVersion } from '../engine/generals'
 import { downloadMatchLogs, listMatchLogs } from '../engine/match-log'
-import { GamePhase, GameMode, Faction } from 'sgs3v3-shared'
+import { GamePhase, GameMode, Faction, type SkillLimitRule } from 'sgs3v3-shared'
 import './LobbyPage.css'
+
+const SKILL_LIMIT_KEY = 'sgsoffline.skillLimitRule'
+const WEAPON_ENHANCE_KEY = 'sgsoffline.weaponEnhance'
+
+function getSkillLimitPreference(): SkillLimitRule {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem(SKILL_LIMIT_KEY) === 'unlimited'
+            ? 'unlimited' : 'limited'
+    } catch {
+        return 'limited'
+    }
+}
+
+function setSkillLimitPreference(rule: SkillLimitRule): void {
+    try {
+        if (typeof localStorage !== 'undefined') localStorage.setItem(SKILL_LIMIT_KEY, rule)
+    } catch {
+        /* ignore */
+    }
+}
+
+function getWeaponEnhancePreference(): boolean {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem(WEAPON_ENHANCE_KEY) === 'on'
+    } catch {
+        return false
+    }
+}
+
+function setWeaponEnhancePreference(on: boolean): void {
+    try {
+        if (typeof localStorage !== 'undefined') localStorage.setItem(WEAPON_ENHANCE_KEY, on ? 'on' : 'off')
+    } catch {
+        /* ignore */
+    }
+}
 
 /** 单机对局里“我”选哪一方；随机由开始按钮现场决定 */
 type LocalSide = 'random' | 'cool' | 'warm' | 'hotseat' | 'landlord' | 'farmers'
@@ -21,9 +57,17 @@ export default function LobbyPage() {
     const [mode, setMode] = useState<GameMode>(GameMode.CLASSIC)
     const [seedText, setSeedText] = useState('')
     const [side, setSide] = useState<LocalSide>('random')
+    /** 斗地主 / 欢乐成双的奇技模式：选将时额外从洛书池抽 3 个技能 */
+    const [oddity, setOddity] = useState(false)
+    /** 开局技能规则：同一武将技能/武器效果每回合至多发动五次，或不受限制 */
+    const [skillLimitRule, setSkillLimitRule] = useState<SkillLimitRule>(() => getSkillLimitPreference())
+    /** 武器牌加强：开启后七件武器按加强版规则结算 */
+    const [weaponEnhance, setWeaponEnhance] = useState<boolean>(() => getWeaponEnhancePreference())
+    // 进大厅时读一次未打完的对局；没有存档时不显示入口
+    const [resumeInfo] = useState<ResumeInfo | null>(() => getResumeInfo())
 
-    // 洛书版 / 平衡版的武将池里有军争牌的技能，只能配 156 张（军争）牌堆
-    const poolForces156 = poolVersion === 'luoshu' || poolVersion === 'custom'
+    // 平衡版 / 平衡扩展版 / 乱斗版含有军争牌技能，只能配 156 张（军争）牌堆
+    const poolForces156 = poolVersion !== 'classic2013'
     const effectiveDeck: DeckType = poolForces156 ? 'tongshuai156' : deckType
 
     // 已存下的偏好若与武将池冲突（例如上次选了洛书版 + 108 张），进页面就纠正
@@ -57,11 +101,21 @@ export default function LobbyPage() {
     function selectPool(v: GeneralPoolVersion) {
         setPoolVersion(v)
         setPoolPreference(v)
-        // 洛书版 / 平衡版只能配 156 张牌堆
-        if (v === 'luoshu' || v === 'custom') {
+        // 平衡版 / 平衡扩展版 / 乱斗版只能配 156 张牌堆
+        if (v !== 'classic2013') {
             setDeckType('tongshuai156')
             setDeckPreference('tongshuai156')
         }
+    }
+
+    function selectSkillLimitRule(rule: SkillLimitRule) {
+        setSkillLimitRule(rule)
+        setSkillLimitPreference(rule)
+    }
+
+    function selectWeaponEnhance(on: boolean) {
+        setWeaponEnhance(on)
+        setWeaponEnhancePreference(on)
     }
 
     function parseSeed(): number | undefined | null {
@@ -75,6 +129,16 @@ export default function LobbyPage() {
         return raw === '' ? undefined : Number(raw) % 4294967296
     }
 
+    function resumeLabel(info: ResumeInfo): string {
+        const modeName = info.mode === GameMode.DOUDIZHU ? '斗地主'
+            : info.mode === GameMode.HUANLE_SHUANG ? '欢乐成双'
+                : '统率三军'
+        const stage = info.phase === GamePhase.PLAYING
+            ? `第 ${info.round} 回合`
+            : info.phase === GamePhase.DEPLOY ? '部署中' : '选将中'
+        return `${modeName} · ${stage}`
+    }
+
     function handleStart() {
         const seed = parseSeed()
         if (seed === null) return
@@ -82,24 +146,24 @@ export default function LobbyPage() {
             const landlordSide: LandlordSide = side === 'landlord' || side === 'farmers'
                 ? side
                 : (Math.random() < 0.5 ? 'landlord' : 'farmers')
-            startLocalLandlordMatch(landlordSide, seed)
+            startLocalLandlordMatch(landlordSide, seed, oddity, skillLimitRule, weaponEnhance)
             return
         }
         if (mode === GameMode.HUANLE_SHUANG) {
             const faction = side === 'cool' ? Faction.COOL
                 : side === 'warm' ? Faction.WARM
                     : (Math.random() < 0.5 ? Faction.COOL : Faction.WARM)
-            startLocalPairMatch(faction, seed)
+            startLocalPairMatch(faction, seed, oddity, skillLimitRule, weaponEnhance)
             return
         }
         if (side === 'hotseat') {
-            startLocalHotseatMatch(seed)
+            startLocalHotseatMatch(seed, skillLimitRule, weaponEnhance)
             return
         }
         const faction = side === 'cool' ? Faction.COOL
             : side === 'warm' ? Faction.WARM
                 : (Math.random() < 0.5 ? Faction.COOL : Faction.WARM)
-        startLocalMatch(faction, seed)
+        startLocalMatch(faction, seed, skillLimitRule, weaponEnhance)
     }
 
     const sideButton = (value: LocalSide, label: string) => (
@@ -153,13 +217,17 @@ export default function LobbyPage() {
                                 <label className="form-label">武将池</label>
                                 <div className="lobby-actions">
                                     <button
-                                        className={`btn lobby-btn ${poolVersion === 'luoshu' ? 'btn-primary' : 'btn-secondary'}`}
-                                        onClick={() => selectPool('luoshu')}
-                                    >洛书版（{getGeneralPool('luoshu').length} 将）</button>
+                                        className={`btn lobby-btn ${poolVersion === 'brawl' ? 'btn-primary' : 'btn-secondary'}`}
+                                        onClick={() => selectPool('brawl')}
+                                    >乱斗版（{getGeneralPool('brawl').length} 将）</button>
                                     <button
-                                        className={`btn lobby-btn ${poolVersion === 'custom' ? 'btn-primary' : 'btn-secondary'}`}
-                                        onClick={() => selectPool('custom')}
-                                    >平衡版（60 将）</button>
+                                        className={`btn lobby-btn ${poolVersion === 'balance_ext' ? 'btn-primary' : 'btn-secondary'}`}
+                                        onClick={() => selectPool('balance_ext')}
+                                    >平衡扩展版（{getGeneralPool('balance_ext').length} 将）</button>
+                                    <button
+                                        className={`btn lobby-btn ${poolVersion === 'balance' ? 'btn-primary' : 'btn-secondary'}`}
+                                        onClick={() => selectPool('balance')}
+                                    >平衡版（{getGeneralPool('balance').length} 将）</button>
                                     <button
                                         className={`btn lobby-btn ${poolVersion === 'classic2013' ? 'btn-primary' : 'btn-secondary'}`}
                                         onClick={() => selectPool('classic2013')}
@@ -183,6 +251,55 @@ export default function LobbyPage() {
                             </div>
                         </>
                     )}
+
+                    {(mode === GameMode.DOUDIZHU || mode === GameMode.HUANLE_SHUANG) && (
+                        <div className="form-group">
+                            <label className="form-label">玩法</label>
+                            <div className="lobby-actions">
+                                <button
+                                    className={`btn lobby-btn ${!oddity ? 'btn-primary' : 'btn-secondary'}`}
+                                    onClick={() => setOddity(false)}
+                                >标准</button>
+                                <button
+                                    className={`btn lobby-btn ${oddity ? 'btn-primary' : 'btn-secondary'}`}
+                                    title="选将时每名角色额外从洛书池抽 3 个技能，选定武将时一并选择"
+                                    onClick={() => setOddity(true)}
+                                >奇技模式</button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="form-group">
+                        <label className="form-label">武将技能 / 武器效果</label>
+                        <div className="lobby-actions">
+                            <button
+                                className={`btn lobby-btn ${skillLimitRule === 'limited' ? 'btn-primary' : 'btn-secondary'}`}
+                                title="同一武将技能 / 武器效果每回合至多发动或触发五次"
+                                onClick={() => selectSkillLimitRule('limited')}
+                            >限五次（每回合至多五次）</button>
+                            <button
+                                className={`btn lobby-btn ${skillLimitRule === 'unlimited' ? 'btn-primary' : 'btn-secondary'}`}
+                                title="同一武将技能 / 武器效果每回合发动次数不限"
+                                onClick={() => selectSkillLimitRule('unlimited')}
+                            >无限制</button>
+                        </div>
+                    </div>
+
+                    <div className="form-group">
+                        <label className="form-label">武器牌加强</label>
+                        <div className="lobby-actions">
+                            <button
+                                className={`btn lobby-btn ${!weaponEnhance ? 'btn-primary' : 'btn-secondary'}`}
+                                title="七件武器按标准规则结算"
+                                onClick={() => selectWeaponEnhance(false)}
+                            >标准</button>
+                            <button
+                                className={`btn lobby-btn ${weaponEnhance ? 'btn-primary' : 'btn-secondary'}`}
+                                title="雌雄双股剑 / 青龙偃月刀 / 麒麟弓 / 青釭剑 / 连弩 / 方天画戟 / 朱雀羽扇按加强版规则结算"
+                                onClick={() => selectWeaponEnhance(true)}
+                            >加强</button>
+                        </div>
+                    </div>
 
                     <div className="form-group">
                         <label className="form-label">阵营</label>
@@ -224,6 +341,22 @@ export default function LobbyPage() {
                     <div className="lobby-actions lobby-start-row">
                         <button className="btn btn-primary lobby-start-btn" onClick={handleStart}>开始</button>
                     </div>
+                    <div className="lobby-actions lobby-start-row">
+                        <button className="btn btn-secondary lobby-start-btn" onClick={() => navigate('/review')}>
+                            复盘与统计（{listMatchLogs().length} 局）
+                        </button>
+                    </div>
+                    {resumeInfo && (
+                        <div className="lobby-actions lobby-start-row">
+                            <button
+                                className="btn btn-secondary lobby-start-btn"
+                                title="接着打上次没打完的对局：局面、随机序列与对局日志都原样恢复"
+                                onClick={() => { resumeLocalMatch() }}
+                            >
+                                继续上次对局（{resumeLabel(resumeInfo)}）
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

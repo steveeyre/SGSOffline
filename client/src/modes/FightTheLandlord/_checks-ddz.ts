@@ -15,7 +15,7 @@ import { checkGameOver } from '../../engine/game-state'
 import { getGeneralById, getGeneralPool } from '../../engine/generals'
 import { dealDamage, handleRespond } from '../../engine/game-actions'
 import { continueTurnFromJudge } from '../../engine/turn-manager'
-import { aiLandlordDraft, buildLandlordPools, getLandlordGeneralPool } from './landlord-draft'
+import { aiLandlordDraft, buildLandlordPools, getLandlordGeneralPool, landlordSeatBonus } from './landlord-draft'
 import { createLandlordMatch, landlordPickGeneral, type LandlordSide } from './landlord-match'
 
 let failed = 0
@@ -67,7 +67,7 @@ function finishDraft(state: ReturnType<typeof createLandlordMatch>): void {
 
 console.log('[斗地主：池与牌堆]')
 const pool = getLandlordGeneralPool()
-const luoshuSize = getGeneralPool('luoshu').length
+const luoshuSize = getGeneralPool('brawl').length
 assert(pool.length === luoshuSize - 2, `模式池 = 洛书池去 2 名（${luoshuSize} → ${pool.length}）`)
 assert(!pool.some((g) => g.id === 'wenpin' || g.id === 'zhugejin'), '剔除文聘、诸葛瑾')
 const pools = buildLandlordPools()
@@ -106,6 +106,7 @@ assert(state.generals.every((g) => g.hand.length >= 4), '三人初始各 4 张�
 const totalCards = state.deck.length + state.discard.length + state.generals.reduce(
     (n, g) => n + g.hand.length + Object.values(g.equip).filter(Boolean).length, 0)
 assert(totalCards === 158, `牌堆+手牌+弃牌 = 158（实际 ${totalCards}，牌堆 ${state.deck.length}）`)
+settleAll(state)
 assert(state.log.some((l) => l.text.includes('跋扈')), '首回合【跋扈】摸牌')
 assert(state.activeGeneralIndex === 0, '地主先手')
 
@@ -143,6 +144,9 @@ settleAll(rewardState)
 const rLandlord = rewardState.generals[0]
 const farmerA = rewardState.generals[1]
 const farmerB = rewardState.generals[2]
+// 该段只验证击杀奖励：地主若为新武将（如张华的【穿屋】会在造成伤害时摸牌），
+// 会干扰“手牌不变”的断言，故换成无伤害触发摸牌的武将。
+rLandlord.generalId = 'caocao'
 farmerA.hand = []
 farmerA.hp = 1
 rLandlord.hand = []
@@ -189,6 +193,24 @@ overState2.generals[1].alive = false
 overState2.generals[2].alive = false
 const over2 = checkGameOver(overState2)
 assert(over2.over && over2.winnerFaction === Faction.WARM, '两名农民阵亡 → 地主胜')
+
+console.log('[斗地主：地主抓将扣掉队友向技能]')
+{
+    // 地主没有队友：结姻/资援/仁德/明鉴这类只能给其他角色用的增益在评分里要扣掉
+    const allyOnly = [
+        { id: 'sunshangxiang_jie', skills: [{ id: 'sunshangxiang_jie_jieyin' }] },
+        { id: 'mizhu', skills: [{ id: 'mizhu_ziyuan' }] },
+        { id: 'liubei', skills: [{ id: 'liubei_rende' }] },
+        { id: 'caorui', skills: [{ id: 'caorui_mingjian' }] },
+        { id: 'zhaoyun_jing', skills: [{ id: 'zhaoyun_jiuzhu' }] },
+    ]
+    for (const def of allyOnly) {
+        assert(landlordSeatBonus(def as any) <= -8, `地主对${def.id}的队友向技能扣分`)
+    }
+    // 不依赖队友的技能不受影响
+    const selfOnly = { id: 'zhangfei', skills: [{ id: 'zhangfei_paoxiao' }] }
+    assert(landlordSeatBonus(selfOnly as any) === 0, '纯输出技能不扣分')
+}
 
 console.log(failed === 0 ? '\n斗地主检查全部通过' : `\n斗地主检查失败 ${failed} 项`)
 if (failed > 0) process.exitCode = 1

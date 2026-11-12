@@ -16,9 +16,11 @@ import {
     BasicCardName,
     ResponseType,
     PendingResponse,
+    FxEvent,
 } from 'sgs3v3-shared'
-import { getGeneralById } from './generals'
+import { getGeneralById, skillMatches } from './generals'
 import { cardFullName } from './card-utils'
+import { recordSkillLog } from './combat-stats'
 
 /**
  * 从武将定义创建武将实例
@@ -47,11 +49,13 @@ export function createGeneralInstance(
         acquiredSkills: [],
         rendeGivenThisTurn: 0,
         rendeHealedThisTurn: false,
+        rendeReceivedThisPhase: [],
         chained: false,
         wineDrunk: false,
         generalPile: [],
         abolishedSlots: [],
         flipped: false,
+        armorPoints: 0,
     }
 }
 
@@ -69,6 +73,14 @@ export interface ActivationInputsSpec {
 
 const hasCardsInArea = (g: GeneralInstance): boolean =>
     g.hand.length > 0 || Object.values(g.equip).some(Boolean)
+
+/** 带砺（罗宪）/ 火攻等公开亮出的牌：始终对所有角色可见 */
+function visibleHand(g: GeneralInstance, fullyVisible: boolean): Card[] | undefined {
+    if (fullyVisible) return g.hand
+    const revealed = g.revealedCardIds?.length ? g.revealedCardIds : g.dailiCardIds
+    if ((revealed?.length ?? 0) === 0) return undefined
+    return g.hand.filter(c => revealed!.includes(c.id))
+}
 
 /**
  * 技能在“是否发动”询问上可提前声明的输入。
@@ -128,7 +140,7 @@ function activationInputsFor(state: GameState, pending: PendingResponse): Activa
             if (candidates.length === 0) return null
             return { targetSelectOnActivate: true, minTargets: 1, maxTargets: 1, targetCandidates: candidates }
         }
-        case 'xiaoqiao_tianxiang_luoshu': {
+        case 'xiaoqiao_tianxiang': {
             const hasHeart = (c: Card) => c.suit === CardSuit.HEART
                 || (c.suit === CardSuit.SPADE
                     && (getGeneralById(self.generalId)?.skills.some(s => s.id === 'xiaoqiao_hongyan') ?? false))
@@ -207,8 +219,9 @@ export function toClientView(
             hp: g.hp,
             maxHp: g.maxHp,
             handCount: g.hand.length,
-            // 3v3 同阵营手牌可见，便于对队友精确指定顺手牵羊等
-            hand: isMine || g.faction === myFaction ? g.hand : undefined,
+            // 3v3 同阵营手牌可见，便于对队友精确指定顺手牵羊等；带砺牌、火攻亮出的牌公开
+            hand: visibleHand(g, isMine || g.faction === myFaction),
+            revealedCards: g.hand.filter(c => (g.revealedCardIds ?? []).includes(c.id)),
             equip: g.equip,
             judgeZone: g.judgeZone,
             alive: g.alive,
@@ -231,6 +244,7 @@ export function toClientView(
             orangeMarks: g.orangeMarks,
             jueMarks: g.jueMarks,
             flipped: g.flipped,
+            armorPoints: g.armorPoints ?? 0,
             lieMarks: g.lieMarks,
             juzhanYang: g.juzhanYang,
             acquiredSkills: g.acquiredSkills,
@@ -267,6 +281,7 @@ export function toClientView(
         roomId: state.roomId,
         phase: state.phase,
         mode: state.mode,
+        oddityMode: state.oddityMode,
         landlordPick: state.landlordPick,
         landlordHumanSide: state.landlordHumanSide,
         pairPick: state.pairPick,
@@ -283,6 +298,7 @@ export function toClientView(
         activePlayerFaction: state.activePlayerFaction,
         currentActionUnit: state.currentActionUnit,
         activeGeneralIndex: state.activeGeneralIndex,
+        turnSerial: state.turnSerial,
         attackUsedThisTurn: state.attackUsedThisTurn,
         pendingResponse: describePendingResponse(state, state.pendingResponseQueue[0]),
         negateWindow: state.negateWindow ? {
@@ -298,6 +314,7 @@ export function toClientView(
         // 界面只负责按需渲染最近若干条，早先的日志仍可展开查看
         matchId: state.matchId,
         log: [...state.log],
+        fx: state.fx,
     }
 }
 
@@ -321,7 +338,8 @@ export function toSpectatorView(
             hp: g.hp,
             maxHp: g.maxHp,
             handCount: g.hand.length,
-            hand: isViewFaction ? g.hand : undefined,
+            hand: visibleHand(g, isViewFaction),
+            revealedCards: g.hand.filter(c => (g.revealedCardIds ?? []).includes(c.id)),
             equip: g.equip,
             judgeZone: g.judgeZone,
             alive: g.alive,
@@ -339,6 +357,7 @@ export function toSpectatorView(
             kongshengActive: g.kongshengActive,
             liangCards: g.liangCards?.length ?? 0,
             acquiredSkills: g.acquiredSkills,
+            armorPoints: g.armorPoints ?? 0,
             // 智迟：免疫只在“受伤所在回合”内有效（观战视图同样公开）
             zhichiImmune: g.zhichiImmuneTurn !== undefined
                 && g.zhichiImmuneTurn === state.activeGeneralIndex,
@@ -380,6 +399,7 @@ export function toSpectatorView(
         activePlayerFaction: state.activePlayerFaction,
         currentActionUnit: state.currentActionUnit,
         activeGeneralIndex: state.activeGeneralIndex,
+        turnSerial: state.turnSerial,
         attackUsedThisTurn: state.attackUsedThisTurn,
         pendingResponse: describePendingResponse(state, state.pendingResponseQueue[0]),
         negateWindow: state.negateWindow ? {
@@ -393,6 +413,7 @@ export function toSpectatorView(
         harvestPool: state.harvestPool,
         matchId: state.matchId,
         log: [...state.log],
+        fx: state.fx,
         isSpectator: true,
     }
 }
@@ -404,6 +425,27 @@ export function addLog(state: GameState, text: string): void {
     const seq = (state.logSeq ?? 0) + 1
     state.logSeq = seq
     state.log.push({ timestamp: Date.now(), text, seq, matchId: state.matchId })
+    recordSkillLog(state, text)
+}
+
+/** 记录一条动效事件；只保留尾部 40 条，避免长对局无限增长 */
+export function addFx(state: GameState, ev: Omit<FxEvent, 'seq'>): void {
+    const seq = (state.fxSeq ?? 0) + 1
+    state.fxSeq = seq
+    const list = state.fx ?? (state.fx = [])
+    list.push({ ...ev, seq })
+    if (list.length > 40) list.splice(0, list.length - 40)
+}
+
+/** 按卡牌实例 id 找牌名（用过的牌可能已进弃牌堆） */
+export function cardNameById(state: GameState, id: string): string | undefined {
+    for (const g of state.generals) {
+        const hit = g.hand.find((c) => c.id === id)
+            ?? Object.values(g.equip).find((c) => c?.id === id)
+            ?? g.judgeZone.find((c) => c.id === id)
+        if (hit) return hit.name
+    }
+    return state.discard.find((c) => c.id === id)?.name
 }
 
 /**
@@ -500,6 +542,12 @@ export function getAttackRange(
         apply('屯田', -Math.min(attacker.generalPile?.length ?? 0, effectiveDist))
     }
 
+    // 追击（SP马超）：与体力值不大于你的角色计算距离视为1
+    if (hasSkillOnGeneral(attacker, 'machao_sp_zhuiji')
+        && target.hp <= attacker.hp && effectiveDist > 1) {
+        apply('追击', 1 - effectiveDist)
+    }
+
     // 弓骑（韩当）：本阶段攻击范围无限
     if (attacker.infiniteRangePhase) {
         return { inRange: true, distance: effectiveDist, baseDistance: baseDist, range: 999, modifiers }
@@ -516,11 +564,12 @@ export function getAttackRange(
     }
 }
 
-/** 检查武将是否拥有某技能（含原生 + 觉醒获得） */
-function hasSkillOnGeneral(general: GeneralInstance, skillId: string): boolean {
-    const def = getGeneralById(general.generalId)
-    const hasNative = def?.skills.some(s => s.id === skillId) ?? false
-    const hasAcquired = general.acquiredSkills?.includes(skillId) ?? false
+/** 检查武将是否拥有某技能（含原生 + 觉醒获得 + 奇技授予） */
+export function hasSkillOnGeneral(general: GeneralInstance, skillId: string): boolean {
+    const gid = general.generalId
+    const def = getGeneralById(gid)
+    const hasNative = def?.skills.some(s => skillMatches(gid, s.id, skillId)) ?? false
+    const hasAcquired = general.acquiredSkills?.some((id) => skillMatches(gid, id, skillId)) ?? false
     return hasNative || hasAcquired
 }
 
@@ -530,16 +579,26 @@ function hasSkillOnGeneral(general: GeneralInstance, skillId: string): boolean {
  */
 export function getHandLimit(general: GeneralInstance): number {
     let delta = general.handLimitDelta ?? 0
+    // 永久上限修正（流矢/魄袭等）：不随回合清零
+    delta -= general.handLimitPenalty ?? 0
     // 巨贾（糜竺）：手牌上限+X（X 为体力上限）
     if (hasSkillOnGeneral(general, 'mizhu_jujia')) delta += general.maxHp
     // 绝境（神赵云）：手牌上限+2
     if (hasSkillOnGeneral(general, 'shenzhaoyun_juejing')) delta += 2
     // 明鉴（曹叡）：其下个回合手牌上限+1
     if (general.mingjianBonus) delta += 1
+    // 劫营（神甘宁）：持有“营”时手牌上限+1
+    if (general.yingMark) delta += 1
+    // 辟田（郑浑）：因弃置或受伤累计的手牌上限加值
+    if (hasSkillOnGeneral(general, 'zhenghun_pitian')) delta += general.pitianBonus ?? 0
     // 急攻（郭图逢纪）：本回合手牌上限等于本阶段造成的伤害值
     if (general.jigongActive) return Math.max(0, (general.damageDealtThisTurn ?? 0) + delta)
     if (general.handLimitOverride !== undefined) {
         return Math.max(0, general.handLimitOverride + delta)
+    }
+    // 不屈（周泰）：武将牌上有“创”时，手牌上限等于“创”数
+    if (hasSkillOnGeneral(general, 'zhoutai_buqu') && (general.generalPile?.length ?? 0) > 0) {
+        return Math.max(0, (general.generalPile?.length ?? 0) + delta)
     }
     let limit = hasSkillOnGeneral(general, 'zhouyu_jie_yingzi') ? general.maxHp : general.hp
     // 权计（界钟会）：手牌上限增加“权”的数量
@@ -548,6 +607,8 @@ export function getHandLimit(general: GeneralInstance): number {
     if (general.slashNotInHandLimit) {
         limit += general.hand.filter(isSlashLikeCard).length
     }
+    // 腹鳞（李严）：你于回合内获得的牌不计入本回合的手牌上限
+    if (hasSkillOnGeneral(general, 'liyan_fulin')) limit += general.gainedCardsThisTurn ?? 0
     return Math.max(0, limit + delta)
 }
 

@@ -57,12 +57,22 @@ function minusHorse(suit: CardSuit, value: number): Card {
 
 export type DeckType = 'tongshuai156' | 'standard108'
 
-export const DECK_STORAGE_KEY = 'sgs3v3_deck'
+export const DECK_STORAGE_KEY = 'sgsoffline.deck'
+/** 早期版本用的旧键名（下划线分隔），首次读取时搬到新键 */
+const LEGACY_DECK_KEY = 'sgs3v3_deck'
 
 /** 读取用户牌堆偏好，默认统率156 */
 export function getDeckPreference(): DeckType {
     try {
-        const v = typeof localStorage !== 'undefined' ? localStorage.getItem(DECK_STORAGE_KEY) : null
+        if (typeof localStorage === 'undefined') return 'tongshuai156'
+        let v = localStorage.getItem(DECK_STORAGE_KEY)
+        if (v === null) {
+            v = localStorage.getItem(LEGACY_DECK_KEY)
+            if (v !== null) {
+                localStorage.setItem(DECK_STORAGE_KEY, v)
+                localStorage.removeItem(LEGACY_DECK_KEY)
+            }
+        }
         return v === 'standard108' ? 'standard108' : 'tongshuai156'
     } catch {
         return 'tongshuai156'

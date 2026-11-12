@@ -3,7 +3,9 @@
  * 清单只保存 ID，不复制对局数据；真正的上下文由导出的对局日志提供。
  */
 
-const REVIEW_QUEUE_KEY = 'sgs3v3.reviewQueue.v1'
+import { readStorageItem, removeStorageItem } from './storage-keys'
+
+const REVIEW_QUEUE_KEY = 'sgsoffline.reviewQueue.v1'
 const MAX_QUEUE = 100
 
 export interface ReviewMark {
@@ -23,7 +25,7 @@ export function getReviewQueue(): ReviewMark[] {
     const store = safeStorage()
     if (!store) return []
     try {
-        const parsed = JSON.parse(store.getItem(REVIEW_QUEUE_KEY) ?? '[]')
+        const parsed = JSON.parse(readStorageItem(store, REVIEW_QUEUE_KEY) ?? '[]')
         if (!Array.isArray(parsed)) return []
         return parsed.filter((m): m is ReviewMark => typeof m?.id === 'string')
     } catch {
@@ -43,7 +45,22 @@ export function pushReviewId(id: string): ReviewMark[] {
 }
 
 export function clearReviewQueue(): void {
-    safeStorage()?.removeItem(REVIEW_QUEUE_KEY)
+    const store = safeStorage()
+    if (store) removeStorageItem(store, REVIEW_QUEUE_KEY)
+}
+
+/** 只保留属于本局的 ID：换局后旧清单不该再带进来 */
+export function pruneReviewQueue(matchId: string): ReviewMark[] {
+    const all = getReviewQueue()
+    const keep = all.filter((m) => m.id === matchId || m.id.startsWith(`${matchId}.`))
+    if (keep.length !== all.length) {
+        try {
+            safeStorage()?.setItem(REVIEW_QUEUE_KEY, JSON.stringify(keep))
+        } catch {
+            // 存储不可用时只影响本局清单，界面计数仍按返回值更新
+        }
+    }
+    return keep
 }
 
 /** 优先用异步剪贴板 API；file:// 等非安全上下文回退到 execCommand */

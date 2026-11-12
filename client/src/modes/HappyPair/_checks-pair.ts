@@ -38,7 +38,7 @@ function assert(cond: boolean, label: string, detail?: unknown): void {
 
 console.log('[欢乐成双：池与牌堆]')
 const pool = getPairGeneralPool()
-const luoshuSize = getGeneralPool('luoshu').length
+const luoshuSize = getGeneralPool('brawl').length
 assert(pool.length === luoshuSize - 2, `模式池 = 洛书池去 2 名（${luoshuSize} → ${pool.length}）`)
 assert(!pool.some((g) => g.id === 'wenpin' || g.id === 'zhugejin'), '剔除文聘、诸葛瑾')
 const pools = buildPairPools()

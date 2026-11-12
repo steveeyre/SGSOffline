@@ -1,0 +1,65 @@
+.op-grid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+.op-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 84px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(150, 128, 255, 0.4);
+    background: rgba(110, 86, 220, 0.12);
+}
+
+.op-card.selectable {
+    cursor: pointer;
+    transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.op-card.selectable:hover {
+    border-color: #b49bff;
+    transform: translateY(-2px);
+}
+
+.op-card.used {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.op-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.op-name {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    color: #e8ddff;
+}
+
+.op-source {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--color-text-muted);
+}
+
+
+/* ── 传统水墨：奇技卡花青 ── */
+.op-card {
+    border: 1px solid rgba(51, 86, 107, 0.40);
+    background: linear-gradient(180deg, rgba(51, 86, 107, 0.10), rgba(255, 255, 255, 0.24));
+}
+
+.op-card.selectable:hover {
+    border-color: var(--color-cool);
+    box-shadow: 0 3px 12px rgba(38, 64, 76, 0.20);
+}
+
+.op-name { color: #24404f; }
+.op-source, .op-desc { color: var(--color-text-muted); }

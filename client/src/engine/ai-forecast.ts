@@ -5,7 +5,7 @@
 import {
     BasicCardName, Card, CardCategory, CardSuit, EquipmentCardName, GameState, TrickCardName,
 } from 'sgs3v3-shared'
-import { getGeneralById } from './generals'
+import { getGeneralById, skillMatches } from './generals'
 import { DECK_SIZE, KEY_CARD_COUNTS } from './deck-meta'
 import { guessHand, teamResource } from './ai-memory'
 import { slashDamageBonus } from './general-playbook'
@@ -15,8 +15,9 @@ export type GeneralView = GameState['generals'][number]
 const DODGE_RATE = KEY_CARD_COUNTS.dodge / DECK_SIZE
 
 function hasSkill(g: GeneralView, id: string): boolean {
-    if (g.acquiredSkills?.includes(id)) return true
-    return !!getGeneralById(g.generalId)?.skills.some((s) => s.id === id)
+    const gid = g.generalId
+    if (g.acquiredSkills?.some((sid) => skillMatches(gid, sid, id))) return true
+    return !!getGeneralById(gid)?.skills.some((s) => skillMatches(gid, s.id, id))
 }
 
 function isBlack(card: Card): boolean {

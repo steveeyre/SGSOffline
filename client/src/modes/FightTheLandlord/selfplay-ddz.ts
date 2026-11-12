@@ -49,8 +49,9 @@ export function runDdzSelfPlay(
     seed: number,
     maxSteps = 60000,
     onDecision?: (trace: DdzSelfPlayTrace) => void,
+    oddityMode = false,
 ): DdzSelfPlayResult {
-    const state = createLandlordMatch(side, seed)
+    const state = createLandlordMatch(side, seed, true, oddityMode)
     finishDraft(state)
     let steps = 0
     for (; steps < maxSteps; steps++) {
@@ -94,13 +95,14 @@ export function runDdzSelfPlay(
 const isCli = process.argv[1]?.includes('selfplay-ddz')
 if (isCli) {
     const games = Number(process.argv[2] ?? 20)
+    const oddityMode = process.argv[3] === 'oddity'
     for (const side of ['landlord', 'farmers'] as const) {
         let wins = 0
         let failures = 0
         let maxSteps = 0
         for (let i = 0; i < games; i++) {
             const seed = 8000 + i
-            const result = runDdzSelfPlay(side, seed)
+            const result = runDdzSelfPlay(side, seed, 60000, undefined, oddityMode)
             maxSteps = Math.max(maxSteps, result.steps)
             if (!result.ok) {
                 failures++
@@ -112,6 +114,6 @@ if (isCli) {
             console.log(`${side} seed=${seed} ok winner=${result.winner} steps=${result.steps} rounds=${result.state.roundState.roundNumber}`)
         }
         const rate = games > 0 ? ((wins / games) * 100).toFixed(1) : '0.0'
-        console.log(`summary ${side}: ${wins}/${games} 胜 (${rate}%) failures=${failures} maxSteps=${maxSteps}`)
+        console.log(`summary ${side} oddity=${oddityMode}: ${wins}/${games} 胜 (${rate}%) failures=${failures} maxSteps=${maxSteps}`)
     }
 }

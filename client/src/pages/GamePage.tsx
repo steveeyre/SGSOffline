@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useGameStore } from '../store/gameStore'
 import {
@@ -23,14 +23,20 @@ import { GENERAL_IMAGE } from '../data/generalImages'
 import { useTooltip, generalTooltipById, cardTooltipContent, TooltipBubble } from '../components/Tooltip'
 import { getAttackRange } from '../engine/game-state'
 import { logReviewId } from '../engine/match-log'
-import { clearReviewQueue, copyText, getReviewQueue, pushReviewId } from '../engine/review'
+import { clearReviewQueue, copyText, getReviewQueue, pruneReviewQueue, pushReviewId } from '../engine/review'
 import { cardNameOf } from '../engine/card-utils'
 import { CARD_TOOLTIP } from '../data/tooltipData'
 import { GENERALS, getGeneralById, getSkillDefById } from '../engine/generals'
-import { dispatchLocalRestart, getLocalPace, setLocalPace } from '../engine/local-dispatch'
+import { exitLocalMatch, getCoachSuggestions, getLocalPace, getPoolStats, isLocalMatchActive, setLocalPace, type CoachSuggestion, type PoolStats } from '../engine/local-dispatch'
 import { pairBoardSeats } from '../modes/HappyPair/pair-match'
 import './GamePage.css'
 import './GamePagePair.css'
+import '../fx/fx.css'
+import { FxLayer, type FxHandle, type LineTone } from '../fx/FxLayer'
+import { playSfx, type SfxKind } from '../audio/sfx'
+import { centerIn } from '../fx/measure'
+import { DUR } from '../fx/ease'
+import { wait } from '../fx/track'
 
 const GENERAL_NAMES: Record<string, string> = {
     // 蜀
@@ -40,7 +46,7 @@ const GENERAL_NAMES: Record<string, string> = {
     // 魏
     caocao: '曹操', simayi: '司马懿', xiahoudun: '夏侯惇',
     zhangliao: '界张辽', guojia: '郭嘉', zhenji: '界甄姬',
-    xiahoyuan: '夏侯渊', xuhuang: '徐晃', xuhuang_jie: '界徐晃', wenpin: '文聘',
+    xiahouyuan: '夏侯渊', xuhuang: '徐晃', xuhuang_jie: '界徐晃', wenpin: '文聘',
     // 吴
     sunquan: '孙权', ganning: '甘宁', huanggai: '黄盖',
     zhouyu: '周瑜', daqiao: '大乔', sunshangxiang: '孙尚香',
@@ -49,12 +55,12 @@ const GENERAL_NAMES: Record<string, string> = {
     huatuo: '界华佗', lvbu: '吕布', diaochan: '界貂蝉', pangde: '庞德', jiaxu: '贾诩',
     chengong: '陈宫', jushou: '沮授', fuwan: '伏完', zhangjiao: '张角',
     // 平衡版扩展
-    lidian_jie: '界李典', simayi_jie: '界司马懿', xuchu_jie: '界许褚',
+    lidian_jie: '界李典', simayi_jing: '司马懿-竞', xuchu_jie: '界许褚',
     dengai: '邓艾', xunyou: '界荀攸', wangyi: '王异', wangji: '王基',
     yuejin: '乐进', simalang: '司马朗', litong: '李通',
     caocao_jie: '界曹操', dianwei_jie: '界典韦',
     machao_jie: '界马超', madai: '界马岱', sunshangxiang_sp: 'SP孙尚香',
-    zhoucang: '界周仓', yanyan: '严颜', wangping: '王平',
+    zhoucang: '周仓', yanyan: '严颜', wangping: '王平',
     huangquan_jing: '黄权', sunqian: '孙乾',
     lingtong: '凌统', ganning_jie: '界甘宁', zhouyu_jie: '界周瑜',
     luxun_jie: '界陆逊', guyong: '界顾雍', dingfeng: '丁奉',
@@ -77,6 +83,7 @@ const GENERAL_NAMES: Record<string, string> = {
 for (const def of GENERALS) {
     if (!(def.id in GENERAL_NAMES)) GENERAL_NAMES[def.id] = def.name
 }
+const GENERAL_NAME_SET = new Set(Object.values(GENERAL_NAMES))
 
 function getSuitSymbol(suit: string) {
     return { spade: '♠', heart: '♥', club: '♣', diamond: '♦' }[suit] ?? ''
@@ -133,12 +140,15 @@ interface SkillDef {
 function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
     const map: Record<string, SkillDef[]> = {
         sunquan: [{ id: 'sunquan_zhiheng', name: '制衡', desc: '限一次：弃任意张手牌，摸等量牌' }],
+        sunquan_jie: [{ id: 'sunquan_jie_zhiheng', name: '制衡', desc: '限一次：弃任意张牌，摸等量牌；若弃置了所有手牌，多摸一张' }],
+        sunquan_jing: [{ id: 'sunquan_jing_zhiheng', name: '制衡', desc: '限一次：弃任意张牌，摸等量牌；己方有角色阵亡且弃置全部手牌时，额外摸X张（X为己方阵亡数）' }],
         huanggai: [{ id: 'huanggai_kurou', name: '苦肉', desc: '失去1体力，摸2张牌' }],
         sunshangxiang: [{ id: 'sunshangxiang_jieyin', name: '结姻', desc: '限一次：弃2牌，与已受伤男性各回1血' }],
         huatuo: [{ id: 'huatuo_qingnang', name: '青囊', desc: '限一次：弃1张手牌，令一名已受伤的角色回复1点体力' }],
         dongyun: [{ id: 'dongyun_bingzheng', name: '秉正', desc: '限一次：令手牌数≠体力值的角色弃1张或摸1张；若之后相等你摸1张并可将1张交给其' }],
         caoren_sp: [{ id: 'caoren_weikui', name: '伪溃', desc: '限一次：失去1体力，观看一名角色手牌：有【闪】视为对其使用【杀】，否则弃其一张牌' }],
         jiangwei: [{ id: 'jiangwei_tiaoxin', name: '挑衅', desc: '限一次：对方角色出杀否则弃其一牌' }],
+        jiangwei_jie: [{ id: 'jiangwei_tiaoxin', name: '挑衅', desc: '限一次：令一名其他角色选择对你出杀（若你在其攻击范围内）或令你弃其一牌' }],
         diaochan: [{ id: 'diaochan_lijian', name: '离间', desc: '限一次：弃1牌，令两名男性决斗' }],
         zhouyu: [{ id: 'zhouyu_fanjian', name: '反间', desc: '限一次：目标选花色→获你一牌→不同受1伤' }],
         liubei: [{ id: 'liubei_rende', name: '仁德', desc: '将手牌给其他角色，每给2张回1血' }],
@@ -148,18 +158,23 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
             { id: 'guanyu_zhongyi', name: '忠义', desc: '限定：置红牌，己方杀+1伤' },
         ],
         jiaxu: [{ id: 'jiaxu_luanwu', name: '乱武', desc: '限定：所有其他角色出杀或失1血' }],
+        guanyu_jie: [{ id: 'guanyu_jie_yijue', name: '义绝', desc: '限一次：弃一张牌，令一名其他角色展示一张手牌' }],
+        zhangmancheng: [{ id: 'zhangmancheng_luecheng', name: '掠城', desc: '限一次：标记手牌中的【杀】，本回合对其使用无次数限制' }],
+        menghuo_sp: [{ id: 'menghuo_sp_manwang', name: '蛮王', desc: '弃任意张牌，依次执行等量项' }],
+        caimao: [{ id: 'caimao_zuolian', name: '佐练', desc: '限一次：令至多体力值名角色展示手牌，随机交换火/雷【杀】' }],
         chengong: [{
             id: 'chengong_mingce', name: '明策',
             desc: '限一次：选1张装备牌或【杀】，再选受牌者（可再选其攻击范围内的杀目标）；其视为出杀或摸一张牌',
         }],
         ganning: [{ id: 'ganning_qixi', name: '奇袭', desc: '黑色牌当过河拆桥' }],
-        xuhuang: [{ id: 'xuhuang_duanliang', name: '断粮', desc: '黑色非锦囊牌当兵粮寸断；对手牌数不少于你的角色无距离限制' }],
+        ganning_jing: [{ id: 'ganning_qixi', name: '奇袭', desc: '黑色牌当过河拆桥' }],
+        xuhuang_jing: [{ id: 'xuhuang_jing_duanliang', name: '断粮', desc: '黑色非锦囊牌当兵粮寸断；对距离为2的其他角色无距离限制' }],
         daqiao: [{ id: 'daqiao_guose', name: '国色', desc: '♦牌当乐不思蜀' }],
         simalang: [{ id: 'simalang_quji', name: '去疾', desc: '限一次：弃X张牌（X为已损体力），令至多X名角色各回1血；含黑色牌则失去1血' }],
         dianwei_jie: [{ id: 'dianwei_jie_qiangxi', name: '强袭', desc: '限两次：受到1点伤害或弃1张武器牌，对一名其他角色造成1点伤害（每名角色每阶段限一次）' }],
         wangping: [{ id: 'wangping_feijun', name: '飞军', desc: '限一次：弃1张牌，令一名角色交你一张牌或令你摸两张' }],
         huangquan_jing: [{ id: 'huangquan_jianji', name: '谏计', desc: '限一次：令一名其他角色摸一张牌，然后其可以使用该牌' }],
-        zhouyu_jie: [{ id: 'zhouyu_jie_fanjian', name: '反间', desc: '限一次：展示一张手牌交给一名其他角色，令其弃同花色所有牌或失去1点体力' }],
+        zhouyu_jie: [{ id: 'zhouyu_jie_fanjian', name: '反间', desc: '限一次：展示一张手牌交给一名敌方角色，令其本回合非锁定技失效，然后其弃同花色所有牌（至少两张）或失去1点体力' }],
         guyong: [{ id: 'guyong_shenxing', name: '慎行', desc: '限体力值次：弃2张牌，颜色不同摸2张，否则摸1张' }],
         dingfeng: [{ id: 'dingfeng_fenxun', name: '奋迅', desc: '限一次：本回合与一名角色距离视为1；若本回合未对其造成伤害，回合结束时弃一张牌' }],
         zhugeke: [{ id: 'zhugeke_duwu', name: '黩武', desc: '弃X张牌（X为目标体力），对攻击范围内一名角色造成1点伤害' }],
@@ -206,15 +221,16 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
             id: 'chengong_mingce', name: '明策',
             desc: '限一次：选1张装备牌或【杀】，再选受牌者（可再选其攻击范围内的杀目标）；其视为出杀或摸一张牌，造成伤害或选择摸牌时你与其各摸一张',
         }],
-        huatuo_jie: [{ id: 'huatuo_chuli', name: '除疠', desc: '限一次：选势力各不相同的其他角色，弃置你与他们的各一张牌，因此弃牌者各摸一张' }],
+        huatuo_jie: [{ id: 'huatuo_qingnang', name: '青囊', desc: '限一次：弃1张手牌，令一名已受伤的角色回复1点体力；弃置红色牌则本阶段可再次发动（每名角色每阶段限一次）' }],
         jiaxu_jie: [{ id: 'jiaxu_luanwu', name: '乱武', desc: '限定：所有其他角色出杀或失1血；结算结束后可视为使用一张无距离限制的【杀】' }],
         diaochan_jie: [{ id: 'diaochan_lijian', name: '离间', desc: '限一次：弃1牌，令两名男性决斗' }],
-        xuhuang_jie: [{ id: 'xuhuang_duanliang', name: '断粮', desc: '黑色非锦囊牌当兵粮寸断；对手牌数不少于你的角色无距离限制' }],
+        xuhuang_jie: [{ id: 'xuhuang_jie_duanliang', name: '断粮', desc: '黑色非锦囊牌当兵粮寸断；对手牌数不少于你的角色无距离限制' }],
         sunshangxiang_jie: [{
-            id: 'sunshangxiang_jieyuan', name: '结姻',
+            id: 'sunshangxiang_jie_jieyin', name: '结姻',
             desc: '限一次：选一名男性角色，弃一张手牌或将一张装备牌置入其装备区；体力高者摸一张，体力低者回复1点',
         }],
         xuezong: [{ id: 'xuezong_jiexun', name: '诫训', desc: '结束阶段：令一名其他角色摸场上♦牌数张，再弃此前发动次数张' }],
+        jiangqin: [{ id: 'jiangqin_shangyi', name: '尚义', desc: '限一次：弃1张牌，令一名有手牌的其他角色观看你的手牌，然后你观看其手牌并获得其中1张' }],
         daqiao_jie: [
             { id: 'daqiao_jie_guose', name: '国色', desc: '限一次：♦牌当【乐不思蜀】使用，然后摸一张' },
             {
@@ -224,15 +240,15 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
             },
         ],
         caifuren_jie: [{ id: 'caifuren_xianzhou', name: '献州', desc: '限定：将装备区所有牌交给一名角色，令其回复等量体力或造成伤害' }],
-        simayi_jie: [
-            { id: 'simayi_jie_jiaozhao', name: '矫诏', desc: '限一次：将一张牌当任意基本牌使用' },
+        simayi_jing: [
+            { id: 'simayi_jing_jiaozhao', name: '矫诏', desc: '限一次：将一张牌当任意基本牌使用' },
             {
-                id: 'simayi_jie_jiaozhao_mod1', name: '矫诏·修改一',
+                id: 'simayi_jing_jiaozhao_mod1', name: '矫诏·修改一',
                 desc: '每轮限一次：将一张牌当任意基本牌或普通锦囊牌使用',
                 jzLevel: 1, roundField: 'jiaozhaoMod1Round',
             },
             {
-                id: 'simayi_jie_jiaozhao_mod2', name: '矫诏·修改二',
+                id: 'simayi_jing_jiaozhao_mod2', name: '矫诏·修改二',
                 desc: '每轮限一次：视为使用一张基本牌或普通锦囊牌',
                 jzLevel: 2, roundField: 'jiaozhaoMod2Round',
             },
@@ -290,6 +306,10 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
             id: 'chenlin_songci', name: '颂词',
             desc: '每名角色限一次：选择一名手牌数≠体力值的角色，其摸两张或弃两张牌',
         }],
+        liuyan: [{
+            id: 'liuyan_limu', name: '立牧',
+            desc: '限一次：将一张牌当【乐不思蜀】置于自己的判定区，并回复1点体力；判定区有牌时，对攻击范围内的其他角色用牌无距离和次数限制',
+        }],
         shenlusu: [{
             id: 'shenlusu_tamo', name: '榻谟',
             desc: '限定技：失去1点体力，然后重新排列所有角色的座次（不影响行动顺序）',
@@ -298,8 +318,8 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
             desc: '限一次：交给一名场上有牌的其他角色X张牌（X为其场上牌数），然后获得其场上的所有牌',
         }],
         sunchen: [{
-            id: 'sunchen_nigu', name: '逆固',
-            desc: '限一次：弃置任意张花色不同的牌，令攻击范围内的角色选择是否交给你一张牌，本回合下X次伤害+1',
+            id: 'sunchen_zigu', name: '自固',
+            desc: '限一次：弃一张牌，获得自己或一名有装备角色装备区里的一张牌',
         }],
         peixiu: [{
             id: 'peixiu_juezhi', name: '爵制',
@@ -320,6 +340,34 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
         shanzhaoyun: [{
             id: 'shanzhaoyun_zhendan', name: '镇胆',
             desc: '将一张非基本手牌当本轮未使用过的基本牌使用（【杀】需选目标）',
+        }],
+        manchong: [{
+            id: 'manchong_junxing', name: '峻刑',
+            desc: '限一次：弃任意张手牌，令一名其他角色弃等量牌并失1血，或翻面摸等量牌',
+        }],
+        mazhong: [{
+            id: 'mazhong_fuman', name: '抚蛮',
+            desc: '每名角色限一次：交给一名其他角色一张手牌，其视为使用【杀】',
+        }],
+        zhanghua: [{
+            id: 'zhanghua_jianhe', name: '剑合',
+            desc: '每名角色限一次：重铸至少两张同名牌或装备牌，令其重铸等量牌或受1点雷电伤害',
+        }],
+        sunchen_shi: [{
+            id: 'sunchen_shi_nigu', name: '逆固',
+            desc: '限一次：弃置任意张花色不同的牌，令攻击范围内的角色选择是否交给你一张牌，本回合下X次伤害+1',
+        }],
+        zhenghun: [{
+            id: 'zhenghun_qiangzhi', name: '强峙',
+            desc: '限一次：弃置你与一名其他角色的共计三张牌，令失去三张牌者对另一方造成1点伤害',
+        }],
+        qianzhao: [{
+            id: 'qianzhao_weifu', name: '威抚',
+            desc: '弃一张牌并判定：本回合下一张同类别牌无距离限制且可多指定一个目标；类别相同则摸一张',
+        }],
+        wuxian_zu: [{
+            id: 'wuxian_zu_yirong', name: '移荣',
+            desc: '限两次：摸至/弃至手牌上限，然后手牌上限-1/+1',
         }],
     }
     return map[generalId] ?? []
@@ -344,12 +392,39 @@ function acquiredSkillDefs(general: GeneralClientView): SkillDef[] {
     return out
 }
 
+/** 按牌名判断引导线配色：杀/决斗红，装备蓝，其余锦囊紫 */
+function lineToneOf(cardName: string): LineTone {
+    const t = cardName.replace(/[【】\s]/g, '')
+    if (t.includes('杀') || t.includes('决斗')) return 'slash'
+    if (/[刀剑弓斧矛扇甲马]/.test(t)) return 'equip'
+    return 'trick'
+}
+
+/** 键盘操作上下文：渲染期刷新，监听器只注册一次 */
+type KeyCtx = {
+    canPlay: boolean
+    canEnd: boolean
+    cards: string[]
+    select: (id: string) => void
+    play: () => void
+    end: () => void
+    cancel: () => void
+}
+
 function HpGems({ hp, maxHp }: { hp: number; maxHp: number }) {
+    // 首帧不播动画：只在体力变化时让变动的那颗血珠闪一下
+    const mounted = useRef(false)
+    useEffect(() => { mounted.current = true }, [])
     return (
         <div className="hp-gems" title={`${hp}/${maxHp}`}>
-            {Array.from({ length: Math.max(0, maxHp) }, (_, i) => (
-                <span key={i} className={`hp-gem ${i < hp ? 'on' : 'off'}`} />
-            ))}
+            {Array.from({ length: Math.max(0, maxHp) }, (_, i) => {
+                const on = i < hp
+                const anim = mounted.current ? (on ? ' charging' : ' breaking') : ''
+                return (
+                    <span key={`${i}-${on ? 'on' : 'off'}`}
+                        className={`hp-gem ${on ? 'on' : 'off'}${anim}`} />
+                )
+            })}
         </div>
     )
 }
@@ -378,6 +453,7 @@ function GeneralPanel({
     const name = GENERAL_NAMES[general.generalId] ?? general.generalId
     return (
         <div
+            data-general-index={index}
             className={`general-panel faction-${factionCls} ${isActive ? 'active' : ''} ${isTarget ? 'target' : ''} ${!general.alive ? 'dead' : ''} ${isViewing ? 'viewing' : ''} ${general.chained ? 'chained' : ''} ${fx ? `fx-${fx}` : ''}`}
             onClick={() => onSelect?.(index)}
             onMouseEnter={onTooltipEnter}
@@ -387,10 +463,13 @@ function GeneralPanel({
             <div className="general-card-img">
                 <span className="general-portrait-placeholder">{name[0]}</span>
                 {imgSrc && (
-                    <img src={imgSrc} alt={name} className="general-portrait"
+                    <img src={imgSrc} alt={name} className="general-portrait" decoding="async"
                         onError={(e) => { e.currentTarget.style.display = 'none' }} />
                 )}
-                <span className="hp-badge" title={`体力 ${general.hp}/${general.maxHp}`}>{general.hp}/{general.maxHp}</span>
+                <span className="hp-badge" title={`体力 ${general.hp}/${general.maxHp}${(general.armorPoints ?? 0) > 0 ? `，护甲 ${general.armorPoints}` : ''}`}>
+                    {general.hp}/{general.maxHp}
+                    {(general.armorPoints ?? 0) > 0 && <em className="armor-tag">+{general.armorPoints}</em>}
+                </span>
                 {showSeatRole && general.seatRole === SeatRole.COMMANDER && <span className="commander-badge">帅</span>}
                 {showSeatRole && general.seatRole !== SeatRole.COMMANDER && <span className="flank-badge">锋</span>}
             </div>
@@ -496,6 +575,15 @@ function GeneralPanel({
                 </div>
                 <HpGems hp={general.hp} maxHp={general.maxHp} />
                 <div className="general-hand-count">手牌 {general.handCount}</div>
+                {(general.revealedCards?.length ?? 0) > 0 && (
+                    <div className="general-known-hand" title="已公开亮出的手牌（火攻等）">
+                        {general.revealedCards!.map((c) => (
+                            <span key={c.id} className="known-hand-chip">
+                                {getSuitSymbol(c.suit)}{getValueStr(c.value)}{cardNameOf(c.name)}
+                            </span>
+                        ))}
+                    </div>
+                )}
                 {/* 装备区：只露类型图标 + 双字简称，细节走悬停 */}
                 {(general.equip.weapon || general.equip.armor || general.equip.plus_horse || general.equip.minus_horse) && (
                     <div className="general-equip-zone">
@@ -545,18 +633,21 @@ function GeneralPanel({
     )
 }
 
-function PlayingCard({ card, selected, onClick, dimmed, onTooltipEnter, onTooltipMove, onTooltipLeave }: {
+function PlayingCard({ card, selected, onClick, dimmed, onTooltipEnter, onTooltipMove, onTooltipLeave, onPointerDown }: {
     card: Card; selected: boolean; onClick?: () => void; dimmed?: boolean;
     onTooltipEnter?: (e: React.MouseEvent) => void;
     onTooltipMove?: (e: React.MouseEvent) => void;
     onTooltipLeave?: () => void;
+    onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
 }) {
     const red = isRedSuit(card.suit)
     const categoryCls = card.category === CardCategory.BASIC ? 'card-basic'
         : card.category === CardCategory.TRICK ? 'card-trick' : 'card-equip'
     return (
-        <div className={`playing-card ${categoryCls} ${selected ? 'selected' : ''} ${red ? 'red' : 'black'} ${dimmed ? 'dimmed' : ''}`}
+        <div data-card-id={card.id}
+            className={`playing-card ${categoryCls} ${selected ? 'selected' : ''} ${red ? 'red' : 'black'} ${dimmed ? 'dimmed' : ''}`}
             onClick={onClick}
+            onPointerDown={onPointerDown}
             onMouseEnter={onTooltipEnter}
             onMouseMove={onTooltipMove}
             onMouseLeave={onTooltipLeave}
@@ -574,12 +665,17 @@ function PlayingCard({ card, selected, onClick, dimmed, onTooltipEnter, onToolti
     )
 }
 
-/** 日志文本高亮：【技能名】→紫色，伤害→红色 */
+/** 日志文本高亮：武将名加粗去括号，技能名紫色，伤害红色 */
 function highlightLogText(text: string) {
     // 匹配【xxx】
     const parts = text.split(/(【[^】]+】)/g)
     return parts.map((part, i) => {
         if (part.startsWith('【') && part.endsWith('】')) {
+            const inner = part.slice(1, -1)
+            // 武将名不套括号，改用加粗，一行里不再堆满【】
+            if (GENERAL_NAME_SET.has(inner)) {
+                return <b key={i} className="log-general">{inner}</b>
+            }
             // 伤害相关
             if (part.includes('伤害') || part.includes('濒死') || part.includes('阵亡')) {
                 return <span key={i} className="log-damage">{part}</span>
@@ -624,6 +720,21 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
     const { tooltip, onEnter: tooltipEnter, onMove: tooltipMove, onLeave: tooltipLeave } = useTooltip(1500)
     // AI 演算节奏：正常 / 快速 / 瞬时
     const [pace, setPace] = useState(getLocalPace())
+
+    // 手牌区宽度：按张数算负间距，牌面尺寸保持不变
+    const handRef = useRef<HTMLDivElement | null>(null)
+    const [handWidth, setHandWidth] = useState(0)
+    useLayoutEffect(() => {
+        const el = handRef.current
+        if (!el) return
+        const update = () => setHandWidth(el.clientWidth)
+        update()
+        const ro = new ResizeObserver(update)
+        ro.observe(el)
+        return () => ro.disconnect()
+    }, [])
+    // 动效层：飞行牌 / 引导线 / 飘字
+    const fxRef = useRef<FxHandle | null>(null)
     // 整理手牌：点一次只重排一次，牌序记在 handOrder 里，之后不再自动排序
     const [handSortMode, setHandSortMode] = useState<'default' | 'type' | 'suit'>('default')
     const [handOrder, setHandOrder] = useState<string[]>([])
@@ -637,6 +748,12 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
     useEffect(() => () => {
         if (reviewNoticeTimer.current !== null) window.clearTimeout(reviewNoticeTimer.current)
     }, [])
+    // 复盘清单只服务当前这局：换局后旧 ID 不能再带进来
+    const reviewMatchId = gameState?.matchId
+    useEffect(() => {
+        if (!reviewMatchId) return
+        setReviewCount(pruneReviewQueue(reviewMatchId).length)
+    }, [reviewMatchId])
 
     function notifyReview(text: string) {
         setReviewNotice(text)
@@ -710,7 +827,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
 
     if (!gameState) return null
 
-    const { generals, turnPhase, activePlayerFaction, activeGeneralIndex, currentActionUnit, pendingResponse, log, roundState } = gameState
+    const { generals, turnPhase, activePlayerFaction, activeGeneralIndex, currentActionUnit, pendingResponse, log, roundState, attackUsedThisTurn } = gameState
     const isDdz = gameState.mode === 'doudizhu'
     const isPair = gameState.mode === 'huanle_shuang'
 
@@ -743,6 +860,10 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
 
     const canInteractWithHand = !isSpectator && (isActionPhase || isDiscardPhase || myPendingResponse) &&
         (activeGeneral?.faction === myFaction || !!myPendingResponse)
+
+    // AI 思考提示：本地对局轮到对方、且不是瞬时节奏时给个动静
+    const aiThinking = !isSpectator && !isMyTurn && !myPendingResponse
+        && (isActionPhase || isDiscardPhase) && getLocalPace() > 0 && isLocalMatchActive()
 
     // 是否需要选择行动单元：step=0（先手选）或 step=2（后手选）或 step=4/5（剩余边锋选顺序），且轮到我方
     // 让先选择期间不显示
@@ -808,18 +929,19 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
     // 可交互：正在查看活动武将或响应武将
     const canSelectCards = (isViewingActive || isViewingResponding) && canInteractWithHand
 
-    // 手牌一多就压缩牌面而不是换行：行高固定，不会把询问条顶下去
+    // 手牌一多就压缩间距而不是缩牌面：牌面尺寸固定，逐步叠压直到放得下
     const handCardMetrics = (() => {
-        const n = displayGeneral?.hand?.length ?? 0
-        const scale = n <= 7 ? 1 : n <= 10 ? 0.86 : n <= 13 ? 0.74 : n <= 17 ? 0.64 : 0.56
-        const w = Math.round(76 * scale)
-        const h = Math.round(108 * scale)
-        const overlap = scale === 1 ? 8 : Math.round(20 * (1 - scale) + 6)
+        const n = sortedHandCards.length
+        const step = 82
+        const available = Math.max(76, (handWidth || 900) - 24)
+        const overlap = n > 1 && n * step > available
+            ? Math.min(step - 14, (n * step - available) / (n - 1))
+            : 8
         return {
-            '--card-w': `${w}px`,
-            '--card-h': `${h}px`,
-            '--card-overlap': `${overlap}px`,
-            minHeight: `${h + 10}px`,
+            '--card-w': '76px',
+            '--card-h': '108px',
+            '--card-overlap': `${Math.round(overlap)}px`,
+            minHeight: '118px',
         } as React.CSSProperties
     })()
 
@@ -862,7 +984,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
             if (activeSkillId === 'simalang_quji' || activeSkillId === 'zhugeke_duwu' || activeSkillId === 'zumao_yinbing') return Infinity
             if (activeSkillId === 'xunyou_qice') return 0
             if (activeSkillId === 'sunshangxiang_jieyin' || activeSkillId === 'equip_zhangba_spear'
-                || activeSkillId === 'guyong_shenxing') return 2
+                || activeSkillId === 'guyong_shenxing' || activeSkillId === 'guyong_jie_shenxing') return 2
             return 1
         }
         return 1
@@ -897,6 +1019,11 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
     }
 
     function handleCardClick(cardId: string) {
+        // 拖拽结束后的 click 不再当作“点选”
+        if (dragMoved.current) {
+            dragMoved.current = false
+            return
+        }
         if (!canSelectCards) return
         if (activeSkillId === 'chengong_mingce') {
             const card = displayGeneral?.hand?.find(c => c.id === cardId)
@@ -907,7 +1034,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
             const pickCtx = pendingResponse?.context as any
             const hand = displayGeneral?.hand ?? []
             if (myPendingResponse && pendingResponse?.type === ResponseType.SKILL_PICK_CARD
-                && pickCtx?.skillId === 'sunchen_nigu' && !selectedCardIds.includes(cardId)) {
+                && pickCtx?.skillId === 'sunchen_shi_nigu' && !selectedCardIds.includes(cardId)) {
                 const card = hand.find(c => c.id === cardId)
                 const suits = selectedCardIds
                     .map(id => hand.find(c => c.id === id)?.suit)
@@ -940,25 +1067,212 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
     // 英魂：先选角色，再选“摸X弃1 / 摸1弃X”
     const [yinghunTarget, setYinghunTarget] = useState<number | null>(null)
     const [showDiscard, setShowDiscard] = useState(false)
+    // 记牌器：只汇总公开信息，打开时才向引擎取一次
+    const [showPool, setShowPool] = useState(false)
+    const [poolStats, setPoolStats] = useState<PoolStats | null>(null)
+
+    function openPoolStats(): void {
+        setPoolStats(getPoolStats())
+        setShowPool(true)
+    }
+
+    // 教练提示：拿规则 AI 的候选评分，只读不执行
+    const [showCoach, setShowCoach] = useState(false)
+    const [coachTips, setCoachTips] = useState<CoachSuggestion[]>([])
+
+    function openCoach(): void {
+        setCoachTips(getCoachSuggestions())
+        setShowCoach(true)
+    }
     const discardPile = gameState.discard ?? []
+
+    // 音效：左右手对弈只让暖方播，瞬时节奏下静音
+    const sfx = (kind: SfxKind) => {
+        if (view && faction !== Faction.WARM) return
+        if (getLocalPace() <= 0) return
+        playSfx(kind)
+    }
+
+    // 中央提示：刚刚打出的牌名
+    const [playBanner, setPlayBanner] = useState<{ name: string; key: number } | null>(null)
+    // 键盘：Esc 取消、空格出牌/结束、数字选牌
+    const keyCtx = useRef<KeyCtx | null>(null)
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            const el = e.target as HTMLElement | null
+            if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+            if (document.querySelector('.discard-modal-backdrop, .arrange-overlay')) return
+            const c = keyCtx.current
+            if (!c) return
+            if (e.key === 'Escape') {
+                e.preventDefault()
+                c.cancel()
+                return
+            }
+            if (e.key === ' ' || e.key === 'Enter') {
+                // 焦点在按钮上时交给浏览器，避免双触发
+                if (document.activeElement instanceof HTMLButtonElement) return
+                if (!c.canPlay && !c.canEnd) return
+                e.preventDefault()
+                if (c.canPlay) c.play()
+                else c.end()
+                return
+            }
+            if (/^[0-9]$/.test(e.key)) {
+                const idx = e.key === '0' ? 9 : Number(e.key) - 1
+                const id = c.cards[idx]
+                if (id) {
+                    e.preventDefault()
+                    c.select(id)
+                }
+            }
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+    }, [])
+
+    // 每次渲染刷新键盘上下文，避免监听器闭包拿到旧的选牌状态
+    keyCtx.current = {
+        canPlay: !myPendingResponse && selectedCardIds.length > 0
+            && (isDiscardPhase || (isActionPhase && !activeSkillId && isMyTurn)),
+        canEnd: isActionPhase && isMyTurn && !activeSkillId && !myPendingResponse && selectedCardIds.length === 0,
+        cards: canSelectCards ? sortedHandCards.map((c) => c.id) : [],
+        select: handleCardClick,
+        play: isDiscardPhase ? handleDiscard : handleUseCard,
+        end: handleEndTurn,
+        cancel: () => {
+            setActiveSkillId(null)
+            clearSelection()
+        },
+    }
+
+    // 表现层：从施法者面板画一条引导线到目标，并让一张牌飞过去
+    const castVisual = (fromIdx: number, target: number, name: string, tone: LineTone) => {
+        const fxRoot = fxRef.current?.root()
+        if (!fxRoot || fromIdx < 0) return
+        const scope = fxRoot.closest('.game-main')
+        const panelAt = (i: number) => centerIn(scope?.querySelector(`[data-general-index="${i}"]`), fxRoot)
+        const from = panelAt(fromIdx)
+        if (!from) return
+        const to = target >= 0 ? panelAt(target) : centerIn(fxRoot, fxRoot)
+        if (!to) return
+        void fxRef.current?.drawLine({ from, to, tone })
+        void fxRef.current?.flyCard({ from, to, label: name })
+    }
 
     // ── 出牌 / 受伤 特效：从日志里读出最近一次动作，给施法者与目标面板加指向/命中动画 ──
     const [fx, setFx] = useState<{ kind: 'hit' | 'pointer'; target: number; from?: number; card?: string; key: number } | null>(null)
     const lastLogKey = useRef('')
+    // 结构化事件：引擎直接告知谁对谁做了什么，优先于日志解析
+    const lastFxSeq = useRef(0)
+    const fxHandled = useRef(false)
+    // 连斩：同一回合内同一击杀者再次击杀时提示「连斩」，特效不再升级
+    const killTurn = useRef<{ turn: number; actors: Set<number> } | null>(null)
+    useEffect(() => {
+        const list = gameState.fx ?? []
+        const fresh = list.filter((e) => e.seq > lastFxSeq.current)
+        if (fresh.length === 0) return
+        lastFxSeq.current = list[list.length - 1].seq
+        fxHandled.current = true
+        const fxRoot = fxRef.current?.root()
+        const scope = fxRoot?.closest('.game-main')
+        const panelPoint = (i: number) => (fxRoot
+            ? centerIn(scope?.querySelector(`[data-general-index="${i}"]`), fxRoot)
+            : null)
+
+        // 同一批事件中若目标已被 3 点以上伤害击毙，无双与击杀合并为一次特效
+        const dyingTargets = new Set<number>()
+        const heavyHits = new Set<number>()
+        for (const e of fresh) {
+            if (e.kind === 'damage' && (e.amount ?? 0) >= 3) {
+                for (const t of e.targets ?? []) heavyHits.add(t)
+            } else if (e.kind === 'death') {
+                for (const t of e.targets ?? []) dyingTargets.add(t)
+            }
+        }
+
+        for (const e of fresh) {
+            const targets = (e.targets ?? []).filter((t) => t >= 0)
+            const target = targets[0] ?? -1
+            if (e.kind === 'damage' && (e.amount ?? 0) >= 3) {
+                const at = target >= 0 ? panelPoint(target) : null
+                if (!at || dyingTargets.has(target)) continue
+                void fxRef.current?.killStrike({
+                    from: e.actor !== undefined ? panelPoint(e.actor) : null,
+                    at,
+                    label: '无双',
+                    tone: 'wushuang',
+                })
+                setFx({ kind: 'hit', target, from: e.actor, key: Date.now() })
+                sfx('damage')
+                continue
+            }
+            if (e.kind === 'death') {
+                const at = target >= 0 ? panelPoint(target) : null
+                if (!at) continue
+                const killer = e.actor !== undefined ? generals[e.actor] : undefined
+                const victim = target >= 0 ? generals[target] : undefined
+                const enemyKill = !!killer && !!victim && killer.faction !== victim.faction
+                const now = Date.now()
+                let label = '阵亡'
+                if (enemyKill) {
+                    const actor = e.actor!
+                    const turn = gameState.turnSerial ?? 0
+                    if (!killTurn.current || killTurn.current.turn !== turn) {
+                        killTurn.current = { turn, actors: new Set() }
+                    }
+                    const actors = killTurn.current.actors
+                    label = actors.has(actor) ? '连斩' : '击杀'
+                    actors.add(actor)
+                }
+                const wushuang = heavyHits.has(target)
+                void fxRef.current?.killStrike({
+                    from: enemyKill ? panelPoint(e.actor!) : null,
+                    at,
+                    label: wushuang ? `无双 · ${label}` : label,
+                    tone: wushuang ? 'wushuang' : 'kill',
+                })
+                setFx({ kind: 'hit', target, from: e.actor, key: now })
+                sfx('damage')
+                continue
+            }
+            if (e.actor === undefined) continue
+            if (e.kind === 'use' && e.cardName) {
+                castVisual(e.actor, target, cardNameOf(e.cardName), lineToneOf(e.cardName))
+                sfx('play')
+                setPlayBanner({ name: cardNameOf(e.cardName), key: Date.now() })
+            } else if (e.kind === 'skill' && e.skillName) {
+                const name = getSkillDefById(e.skillName)?.name ?? e.skillName
+                castVisual(e.actor, target, name, 'skill')
+                sfx('skill')
+            }
+        }
+    }, [gameState.fx])
+
     useEffect(() => {
         const latest = log[log.length - 1]
         // 日志只保留最近 50 条，用时间戳+文本判断是否有新条目
         const logKey = latest ? `${latest.timestamp}|${latest.text}` : ''
         if (!latest || logKey === lastLogKey.current) return
         lastLogKey.current = logKey
+        // 同一动作已由结构化事件播放过，不再重复解析文本
+        if (fxHandled.current) {
+            fxHandled.current = false
+            return
+        }
         const text = latest.text
         const idxOf = (n: string) => generals.findIndex((g) => (GENERAL_NAMES[g.generalId] ?? g.generalId) === n)
         // 卡面文本：去掉书名号，只取第一段（花色点数 + 牌名）
         const cardOf = (raw: string) => raw.replace(/[【】]/g, '').split('，')[0].replace(/^发动【[^】]*】/, '').trim()
-        const castAt = (caster: string, targetsText: string, cardText: string) => {
+        const castAt = (caster: string, targetsText: string, cardText: string, tone: LineTone = lineToneOf(cardText)) => {
             const names = [...targetsText.matchAll(/【(.+?)】/g)].map((m) => m[1])
             const target = names.map(idxOf).find((i) => i >= 0) ?? -1
-            setFx({ kind: 'pointer', target, from: idxOf(caster), card: cardOf(cardText), key: Date.now() })
+            const fromIdx = idxOf(caster)
+            setFx({ kind: 'pointer', target, from: fromIdx, card: cardOf(cardText), key: Date.now() })
+            const cardName = cardOf(cardText)
+            castVisual(fromIdx, target, cardName, tone)
+            sfx(tone === 'skill' ? 'skill' : 'play')
+            if (tone !== 'skill') setPlayBanner({ name: cardName, key: Date.now() })
         }
         const used = /^【(.+?)】对(.+?)使用了?(.+)$/.exec(text)
         if (used) {
@@ -968,19 +1282,26 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
         // 转化技：发动【武圣】，将…当杀对【目标】使用
         const skillCast = /^【(.+?)】发动【(.+?)】，.*?对(.+?)使用/.exec(text)
         if (skillCast) {
-            castAt(skillCast[1], skillCast[3], skillCast[2])
+            castAt(skillCast[1], skillCast[3], skillCast[2], 'skill')
             return
         }
         // 无目标的自用牌 / 装备
         const selfUse = /^【(.+?)】(使用|装备|饮)(?:了)?(.+)$/.exec(text)
         if (selfUse) {
-            setFx({ kind: 'pointer', target: -1, from: idxOf(selfUse[1]), card: cardOf(selfUse[3]), key: Date.now() })
+            const name = cardOf(selfUse[3])
+            setFx({ kind: 'pointer', target: -1, from: idxOf(selfUse[1]), card: name, key: Date.now() })
+            castVisual(idxOf(selfUse[1]), -1, name, lineToneOf(name))
+            sfx('play')
+            setPlayBanner({ name, key: Date.now() })
             return
         }
         const hit = /^【(.+?)】受到 \d+ 点(.+?)伤害/.exec(text)
         if (hit) {
             const target = idxOf(hit[1])
-            if (target >= 0) setFx({ kind: 'hit', target, key: Date.now() })
+            if (target >= 0) {
+                setFx({ kind: 'hit', target, key: Date.now() })
+                sfx('damage')
+            }
         }
     }, [log])
     useEffect(() => {
@@ -989,15 +1310,105 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
         return () => clearTimeout(timer)
     }, [fx?.key])
 
+    // 手牌位移：已在场上的牌 FLIP 收拢，新摸到的牌从牌堆飞入
+    const prevHandRects = useRef<Map<string, DOMRect>>(new Map())
+    useLayoutEffect(() => {
+        const host = handRef.current
+        const root = fxRef.current?.root()
+        if (!host || !root) return
+        const nodes = Array.from(host.querySelectorAll<HTMLElement>('.playing-card'))
+        if (nodes.length === 0) {
+            prevHandRects.current = new Map()
+            return
+        }
+        const rootRect = root.getBoundingClientRect()
+        const next = new Map<string, DOMRect>()
+        for (const el of nodes) {
+            const id = el.dataset.cardId
+            if (id) next.set(id, el.getBoundingClientRect())
+        }
+        const prev = prevHandRects.current
+        const known = prev.size > 0
+        const deck = known && isViewingMyGeneral
+            ? centerIn(root.closest('.game-main')?.querySelector('.table-chip-deck'), root)
+            : null
+        let fresh = 0
+        next.forEach((rect, id) => {
+            const el = nodes.find((n) => n.dataset.cardId === id)
+            const before = prev.get(id)
+            if (before) {
+                const dx = before.left - rect.left
+                const dy = before.top - rect.top
+                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                    el?.animate(
+                        [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
+                        { duration: 220, easing: 'cubic-bezier(0.33, 1, 0.68, 1)' },
+                    )
+                }
+                return
+            }
+            if (!known || !deck) return
+            const card = sortedHandCards.find((c) => c.id === id)
+            const to = {
+                x: rect.left - rootRect.left + rect.width / 2,
+                y: rect.top - rootRect.top + rect.height / 2,
+            }
+            const delay = fresh * 60
+            el?.animate(
+                [{ opacity: 0 }, { opacity: 0 }, { opacity: 1 }],
+                { duration: DUR.card + 80, delay, easing: 'linear' },
+            )
+            void fxRef.current?.flyCard({ from: deck, to, label: card ? cardNameOf(card.name) : '牌', delay })
+            if (fresh === 0) sfx('draw')
+            fresh += 1
+        })
+        prevHandRects.current = next
+    }, [sortedHandCards, handWidth, displayGeneralIdx, isViewingMyGeneral])
+
+    // 体力增减：在武将面板旁飘出 -1 / +1
+    const prevHpKey = useRef('')
+    useLayoutEffect(() => {
+        const key = generals.map((g) => `${g.hp}/${g.armorPoints ?? 0}`).join(',')
+        const prev = prevHpKey.current
+        if (key === prev) return
+        prevHpKey.current = key
+        if (!prev) return
+        const root = fxRef.current?.root()
+        if (!root) return
+        const scope = root.closest('.game-main')
+        const before = prev.split(',')
+        generals.forEach((g, i) => {
+            const raw = before[i]
+            if (!raw) return
+            const [hpStr, armorStr] = raw.split('/')
+            const hpBefore = Number(hpStr)
+            const armorBefore = Number(armorStr)
+            const at = centerIn(scope?.querySelector(`[data-general-index="${i}"]`), root)
+            if (!at) return
+            const point = { x: at.x + 86, y: at.y - 4 }
+            if (g.hp < hpBefore) fxRef.current?.floatText(point, `-${hpBefore - g.hp}`, 'damage')
+            else if (g.hp > hpBefore) {
+                fxRef.current?.floatText(point, `+${g.hp - hpBefore}`, 'heal')
+                sfx('heal')
+            }
+            const armorNow = g.armorPoints ?? 0
+            if (armorNow < armorBefore) {
+                fxRef.current?.floatText({ x: point.x + 26, y: point.y }, `-${armorBefore - armorNow}`, 'armor')
+            }
+        })
+    }, [generals])
+
     // 检查当前选中的牌是否为AOE（斗地主/欢乐成双座次固定，不需要选结算方向）
     const selectedCard = displayGeneral?.hand?.find(c => c.id === selectedCardIds[0])
     // 技能发动中选中的牌（仁德要给出的牌、制衡要弃的牌等）不是“要使用”，不问 AOE 结算方向
     const isAoeCard = !isDdz && !activeSkillId && !!selectedCard
         && ['barbarians', 'arrows', 'peach_garden', 'harvest'].includes(selectedCard.name)
 
-    // 顺手牵羊只能指定距离1以内且不是自己的角色（奇才无视距离限制）
-    const canTargetWithSelectedCard = (idx: number): boolean => {
-        if (selectedCard?.name !== TrickCardName.STEAL || !activeGeneral) return true
+    // 顺手牵羊 / 兵粮寸断只能指定距离 1 以内的其他角色（奇才无视距离限制）
+    const canTargetWithSelectedCard = (idx: number, card: Card | undefined = selectedCard): boolean => {
+        const needsNear = card?.name === TrickCardName.STEAL
+            || card?.name === TrickCardName.SUPPLY_SHORTAGE
+        if (!needsNear || !activeGeneral) return true
         const target = generals[idx]
         if (!target || !target.alive || target === activeGeneral) return false
         const hasQicai = getGeneralById(activeGeneral.generalId)?.skills
@@ -1005,6 +1416,25 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
         if (hasQicai) return true
         // 客户端视图字段（alive/equip/generalId）足以计算距离
         return getAttackRange(activeGeneral as any, target as any, generals as any).distance <= 1
+    }
+
+    // 杀 / 顺手牵羊 / 兵粮寸断：自动选中的唯一目标。
+    // 只有一名敌人时优先锁敌人（给自己人上杀几乎没有意义），否则只在只有一个合法目标时选中
+    const autoTargetIndexFor = (card: Card | undefined): number | null => {
+        if (!card || !activeGeneral) return null
+        const isSlash = card.name === BasicCardName.ATTACK
+            || card.name === BasicCardName.FIRE_SLASH
+            || card.name === BasicCardName.THUNDER_SLASH
+        const isNearTrick = card.name === TrickCardName.STEAL || card.name === TrickCardName.SUPPLY_SHORTAGE
+        if (!isSlash && !isNearTrick) return null
+        const candidates = generals
+            .map((_, i) => i)
+            .filter(i => !!generals[i]?.alive && i !== activeGeneralIndex && canTargetWithSelectedCard(i))
+            .filter(i => !isSlash
+                || getAttackRange(activeGeneral as any, generals[i] as any, generals as any).inRange)
+        const foes = candidates.filter(i => generals[i].faction !== myFaction)
+        if (foes.length === 1) return foes[0]
+        return candidates.length === 1 ? candidates[0] : null
     }
 
     // 铁索连环必须指定 1-2 名角色，不能空目标使用
@@ -1045,10 +1475,24 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
     const activationCardSelect = !!activationCtx?.cardSelectOnActivate
     const activationMinCards = activationCardSelect ? Math.max(0, Number(activationCtx.minCards) || 0) : 0
     const activationMaxCards = activationCardSelect ? Math.max(1, Number(activationCtx.maxCards) || 1) : 1
+    // 需要选两名角色的主动技能：目标数由技能自己定，不能套用“单目标牌再点就替换”的规则
+    const activeSkillMaxTargets = activeSkillId === 'liuxie_mizhao' || activeSkillId === 'diaochan_lijian'
+        ? 2 : undefined
     const toggleTarget = (i: number) => {
         if (activationTargetCandidates && !activationTargetCandidates.includes(i)) return
         if (!canTargetWithSelectedCard(i)) return
+        // 自动选中的唯一合法目标不能单击取消（仍需点「确认」出牌）
+        if (selectedTargets.includes(i) && autoTargetIndexFor(selectedCard) === i) return
         if (isIronChainSelected && !selectedTargets.includes(i) && selectedTargets.length >= 2) return
+        // 密诏/离间：选满后点第三个角色时替换最早选中的那个，而不是悄悄清空已选目标
+        if (activeSkillMaxTargets !== undefined && !selectedTargets.includes(i)) {
+            if (selectedTargets.length >= activeSkillMaxTargets) {
+                useGameStore.setState({ selectedTargets: [...selectedTargets.slice(1), i] })
+                return
+            }
+            toggleTargetSelection(i)
+            return
+        }
         if (!selectedTargets.includes(i)) {
             if (singleTargetCardSelected) {
                 useGameStore.setState({ selectedTargets: [i] })
@@ -1065,22 +1509,14 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
         toggleTargetSelection(i)
     }
 
-    // 单目标牌：合法目标只剩一个时直接选中，省掉一次点击
+    // 单目标牌：合法目标只剩一个（或只剩一个敌人）时直接选中，省掉一次点击
     useEffect(() => {
         if (!isActionPhase || !isMyTurn || activeSkillId || myPendingResponse) return
         if (selectedCardIds.length !== 1 || selectedTargets.length > 0) return
         if (!activeGeneral) return
         const card = displayGeneral?.hand?.find(c => c.id === selectedCardIds[0])
-        if (!card || !SINGLE_TARGET_CARD_NAMES.includes(card.name as string)) return
-        const needsRange = card.name === BasicCardName.ATTACK
-            || card.name === BasicCardName.FIRE_SLASH
-            || card.name === BasicCardName.THUNDER_SLASH
-        const candidates = generals
-            .map((_, i) => i)
-            .filter(i => !!generals[i]?.alive && i !== activeGeneralIndex && canTargetWithSelectedCard(i))
-            .filter(i => !needsRange
-                || getAttackRange(activeGeneral as any, generals[i] as any, generals as any).inRange)
-        if (candidates.length === 1) useGameStore.setState({ selectedTargets: [candidates[0]] })
+        const auto = autoTargetIndexFor(card)
+        if (auto !== null) useGameStore.setState({ selectedTargets: [auto] })
     }, [selectedCardIds, selectedTargets.length, activeSkillId, isActionPhase, isMyTurn, myPendingResponse])
 
     // 忠勇（周仓）：点击角色选择交牌对象 / 出杀目标
@@ -1189,7 +1625,212 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
         clearSelection()
     }
 
+    // ── 拖拽出牌：按住手牌拖到武将面板上直接使用 ──
+    const dragMoved = useRef(false)
+    const dragState = useRef<{
+        card: Card
+        startX: number
+        startY: number
+        active: boolean
+        ghost: HTMLDivElement | null
+        source: HTMLElement
+        hoverIdx: number | null
+        cleanup: () => void
+    } | null>(null)
+
+    const isAoeCardName = (name: string) =>
+        ['barbarians', 'arrows', 'peach_garden', 'harvest'].includes(name)
+
+    /** 拖到某名角色身上能否直接结算 */
+    function dragTargetAllowed(card: Card, idx: number): boolean {
+        if (!isActionPhase || !isMyTurn || activeSkillId || myPendingResponse) return false
+        if (!activeGeneral || displayGeneral !== activeGeneral) return false
+        const target = generals[idx]
+        if (!target?.alive) return false
+        if (isAoeCardName(card.name)) return false
+        if (card.category === CardCategory.EQUIPMENT) return idx === activeGeneralIndex
+        switch (card.name) {
+            case BasicCardName.PEACH:
+                return idx === activeGeneralIndex && activeGeneral.hp < activeGeneral.maxHp
+            case BasicCardName.WINE:
+                return idx === activeGeneralIndex && !activeGeneral.wineDrunk
+            case BasicCardName.ATTACK:
+            case BasicCardName.FIRE_SLASH:
+            case BasicCardName.THUNDER_SLASH:
+                if (idx === activeGeneralIndex) return false
+                return getAttackRange(activeGeneral as any, target as any, generals as any).inRange
+            case TrickCardName.DISMANTLE:
+            case TrickCardName.STEAL:
+            case TrickCardName.DUEL:
+            case TrickCardName.FIRE_ATTACK:
+            case TrickCardName.OVERINDULGENCE:
+            case TrickCardName.SUPPLY_SHORTAGE:
+                if (idx === activeGeneralIndex) return false
+                return canTargetWithSelectedCard(idx, card)
+            default:
+                return false
+        }
+    }
+
+    function playCardOnTarget(card: Card, idx: number): void {
+        if (!dragTargetAllowed(card, idx)) return
+        const targetIndices = card.category === CardCategory.EQUIPMENT
+            || card.name === BasicCardName.PEACH
+            || card.name === BasicCardName.WINE
+            ? []
+            : [idx]
+        emit.useCard({ cardId: card.id, targetIndices })
+        clearSelection()
+        setActiveSkillId(null)
+    }
+
+    function startCardDrag(e: React.PointerEvent<HTMLDivElement>, card: Card): void {
+        if (e.button !== 0 || !canSelectCards) return
+        const source = e.currentTarget
+        const state = {
+            card,
+            startX: e.clientX,
+            startY: e.clientY,
+            active: false,
+            ghost: null as HTMLDivElement | null,
+            source,
+            hoverIdx: null as number | null,
+            cleanup: () => {},
+        }
+
+        const clearHover = () => {
+            document.querySelectorAll('.general-panel.drag-target')
+                .forEach((p) => p.classList.remove('drag-target'))
+        }
+
+        const onMove = (ev: PointerEvent) => {
+            if (!state.active) {
+                if (Math.hypot(ev.clientX - state.startX, ev.clientY - state.startY) < 8) return
+                state.active = true
+                dragMoved.current = true
+                const ghost = source.cloneNode(true) as HTMLDivElement
+                ghost.classList.add('card-drag-ghost')
+                ghost.classList.remove('selected', 'dimmed', 'hover')
+                ghost.style.left = `${ev.clientX}px`
+                ghost.style.top = `${ev.clientY}px`
+                document.body.appendChild(ghost)
+                state.ghost = ghost
+                source.classList.add('dragging-source')
+                document.body.classList.add('card-dragging')
+            }
+            ev.preventDefault()
+            if (state.ghost) {
+                state.ghost.style.left = `${ev.clientX}px`
+                state.ghost.style.top = `${ev.clientY}px`
+            }
+            const el = document.elementFromPoint(ev.clientX, ev.clientY)
+            const panel = el?.closest<HTMLElement>('.general-panel')
+            const idx = panel ? Number(panel.dataset.generalIndex) : NaN
+            const valid = Number.isInteger(idx) && dragTargetAllowed(card, idx)
+            if (state.hoverIdx !== null && state.hoverIdx !== idx) clearHover()
+            if (valid && panel) panel.classList.add('drag-target')
+            state.hoverIdx = valid ? idx : null
+        }
+
+        const finish = (ev: PointerEvent, cancelled: boolean) => {
+            window.removeEventListener('pointermove', onMove)
+            window.removeEventListener('pointerup', onUp)
+            window.removeEventListener('pointercancel', onCancel)
+            clearHover()
+            source.classList.remove('dragging-source')
+            document.body.classList.remove('card-dragging')
+            state.ghost?.remove()
+            const wasActive = state.active
+            const hoverIdx = state.hoverIdx
+            state.ghost = null
+            state.active = false
+            dragState.current = null
+            if (!wasActive) return
+            // 拖拽结束后浏览器仍会补发一次 click，交给 handleCardClick 吞掉
+            setTimeout(() => { dragMoved.current = false }, 0)
+            if (cancelled) return
+            if (hoverIdx !== null) {
+                playCardOnTarget(card, hoverIdx)
+                return
+            }
+            const droppedOnHand = !!document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.hand-area')
+            if (droppedOnHand) return
+            if (isDiscardPhase && isMyTurn) {
+                emit.discard({ cardIds: [card.id] })
+                clearSelection()
+                return
+            }
+            if (isActionPhase && isMyTurn && !activeSkillId && !myPendingResponse) {
+                useGameStore.setState({ selectedCardIds: [card.id] })
+            }
+        }
+        const onUp = (ev: PointerEvent) => finish(ev, false)
+        const onCancel = (ev: PointerEvent) => finish(ev, true)
+
+        window.addEventListener('pointermove', onMove)
+        window.addEventListener('pointerup', onUp)
+        window.addEventListener('pointercancel', onCancel)
+        state.cleanup = () => {
+            window.removeEventListener('pointermove', onMove)
+            window.removeEventListener('pointerup', onUp)
+            window.removeEventListener('pointercancel', onCancel)
+        }
+        dragState.current = state
+    }
+
+    useEffect(() => () => {
+        dragState.current?.cleanup()
+        dragState.current?.ghost?.remove()
+        document.body.classList.remove('card-dragging')
+    }, [])
+
+    // 出牌阶段手上还有能主动使用的牌时，结束出牌先二次确认，避免误点直接跳过
+    function hasUsableCardInAction(): boolean {
+        if (!activeGeneral || !isActionPhase) return false
+        const hand = activeGeneral.hand ?? []
+        if (hand.length === 0) return false
+        const skillIds = (getGeneralById(activeGeneral.generalId)?.skills ?? []).map(s => s.id)
+        const has = (id: string) =>
+            skillIds.includes(id) || (activeGeneral!.acquiredSkills ?? []).includes(id)
+        const maxSlash = has('zhangfei_paoxiao')
+            ? Infinity
+            : activeGeneral.equip.weapon?.name === EquipmentCardName.CROSSBOW ? 4 : 1
+        const slashReady = attackUsedThisTurn < maxSlash
+        const slashTargetReady = generals.some((g, i) => i !== activeGeneralIndex && g.alive
+            && getAttackRange(activeGeneral as any, g as any, generals as any).inRange)
+        const othersAlive = generals.some((g, i) => i !== activeGeneralIndex && g.alive)
+        const me = activeGeneral
+        return hand.some((card) => {
+            if (card.category === CardCategory.EQUIPMENT) return true
+            switch (card.name) {
+                case BasicCardName.ATTACK:
+                case BasicCardName.FIRE_SLASH:
+                case BasicCardName.THUNDER_SLASH:
+                    return slashReady && slashTargetReady
+                case BasicCardName.PEACH:
+                    return me.hp < me.maxHp
+                case BasicCardName.WINE:
+                    return !me.wineDrunk
+                case BasicCardName.DODGE:
+                case TrickCardName.NEGATE:
+                    return false
+                case TrickCardName.IRON_CHAIN:
+                case TrickCardName.DISMANTLE:
+                case TrickCardName.STEAL:
+                case TrickCardName.DUEL:
+                case TrickCardName.FIRE_ATTACK:
+                case TrickCardName.OVERINDULGENCE:
+                case TrickCardName.SUPPLY_SHORTAGE:
+                    return othersAlive
+                default:
+                    return card.category === CardCategory.TRICK
+            }
+        })
+    }
+
     function handleEndTurn() {
+        if (hasUsableCardInAction()
+            && !window.confirm('手上还有可以使用的牌，确定结束出牌吗？')) return
         emit.endTurn()
     }
 
@@ -1263,7 +1904,13 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                         {turnPhaseName[turnPhase] ?? turnPhase}
                     </div>
                 )}
-                <div className="table-chip">牌堆<b>{gameState.deckCount}</b></div>
+                <div className="table-chip table-chip-deck">牌堆<b>{gameState.deckCount}</b></div>
+                <div className="table-chip click" role="button" tabIndex={0}
+                    title="查看公开信息下的剩余关键牌"
+                    onClick={openPoolStats}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openPoolStats() }}>
+                    记牌
+                </div>
                 <div className="table-chip click" role="button" tabIndex={0}
                     title="点击查看弃牌堆"
                     onClick={() => setShowDiscard(true)}
@@ -1299,7 +1946,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
             </div>
 
             {/* 中央区域 */}
-            <div className="game-center">
+            <div className="game-center ask-overlay">
 
                 {/* 让先选择（仅冷色方、仅第1大回合前） */}
                 {!isPair && roundState?.waitingForYield && myFaction === Faction.COOL && (
@@ -1365,8 +2012,11 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                 )
                             )}
                             {!canPickCommander && !canPickFlanks && (
+                                // 没有可选单元时也必须给一个能推进的按钮：缺人的那一侧交给引擎改选另一单元
                                 <button className="btn btn-secondary"
-                                    onClick={() => emit.chooseActionUnit({ unit: ActionUnitType.FLANKS })}>
+                                    onClick={() => emit.chooseActionUnit({
+                                        unit: commanderReady ? ActionUnitType.COMMANDER : ActionUnitType.FLANKS,
+                                    })}>
                                     继续
                                 </button>
                             )}
@@ -1629,7 +2279,9 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     <div className="view-info">
                                         <div className="view-name">{vName}</div>
                                         <div className="view-sub">{roleLabel}{isActing ? ' · 行动中' : ''}</div>
-                                        <div className="view-stats">体力 <b>{displayGeneral.hp}/{displayGeneral.maxHp}</b></div>
+                                        <div className="view-stats">体力 <b>{displayGeneral.hp}/{displayGeneral.maxHp}</b>
+                                            {(displayGeneral.armorPoints ?? 0) > 0 && <> · 护甲 <b>{displayGeneral.armorPoints}</b></>}
+                                        </div>
                                     </div>
                                 </div>
                             </>
@@ -1732,7 +2384,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                             </span>
                         )}
                     </div>
-                <div className="hand-cards" style={handCardMetrics}>
+                <div className="hand-cards" ref={handRef} style={handCardMetrics}>
                     {displayGeneral && isViewingMyGeneral ? (
                         <>
                             {(sortedHandCards).map((card) => (
@@ -1740,6 +2392,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     key={card.id} card={card}
                                     selected={selectedCardIds.includes(card.id)}
                                     onClick={() => handleCardClick(card.id)}
+                                    onPointerDown={(e) => startCardDrag(e, card)}
                                     dimmed={!canSelectCards || (activeSkillId === 'chengong_mingce' && !isMingceCard(card))}
                                     onTooltipEnter={(e) => { const c = cardTooltipContent(card.name); if (c) tooltipEnter(e, c) }}
                                     onTooltipMove={tooltipMove}
@@ -1752,7 +2405,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                 const equipSkillFilter: Record<string, (card: Card) => boolean> = {
                                     'ganning_qixi': (c) => c.suit === CardSuit.SPADE || c.suit === CardSuit.CLUB,
                                     'diaochan_lijian': () => true,
-                                    'xuhuang_duanliang': (c) => (c.suit === CardSuit.SPADE || c.suit === CardSuit.CLUB),
+                                    'xuhuang_jie_duanliang': (c) => (c.suit === CardSuit.SPADE || c.suit === CardSuit.CLUB),
                                     'daqiao_guose': (c) => c.suit === CardSuit.DIAMOND,
                                     'sunquan_zhiheng': () => true,
                                     'huanggai_kurou': () => true,
@@ -1801,6 +2454,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                                 key={card.id} card={card}
                                                 selected={selectedCardIds.includes(card.id)}
                                                 onClick={() => handleCardClick(card.id)}
+                                                onPointerDown={(e) => startCardDrag(e, card)}
                                             />
                                         ))}
                                     </div>
@@ -1813,7 +2467,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
             </div>
 
             {/* 询问 / 操作条（手牌区上方，无内容时透明） */}
-                <div className="action-btns">
+                <div className="action-btns action-dock">
                     {isActionPhase && isMyTurn && isViewingActive && !gameState.pendingResponse && !gameState.negateWindow && (() => {
                         // toggle模式技能：激活后仍用"出牌"按钮，不显示"确认发动"
                         const TOGGLE_SKILLS = ['guanyu_wusheng', 'chengpu_jie_lihuo']
@@ -1821,7 +2475,12 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                         const isNonToggleSkillActive = activeSkillId && !isToggleSkillActive
                         return (
                         <>
-                            <button className="btn btn-primary" disabled={selectedCardIds.length === 0 || !!isNonToggleSkillActive || !ironChainTargetReady} onClick={handleUseCard}>出牌</button>
+                            <button className="btn btn-primary"
+                                disabled={selectedCardIds.length === 0 || !!isNonToggleSkillActive || !ironChainTargetReady}
+                                title={isNonToggleSkillActive ? '技能已激活：请点「确认发动」'
+                                    : !ironChainTargetReady ? '铁索连环需先指定 1-2 名角色'
+                                        : selectedCardIds.length === 0 ? '先点选一张手牌' : '出牌（空格）'}
+                                onClick={handleUseCard}>出牌</button>
                             {isIronChainSelected && (
                                 <span className="action-hint">
                                     {ironChainTargetReady
@@ -1842,7 +2501,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     </button>
                                 </>
                             )}
-                            {!isNonToggleSkillActive && <button className="btn" onClick={handleEndTurn}>结束出牌</button>}
+                            {!isNonToggleSkillActive && <button className="btn" title="结束出牌（空格）" onClick={handleEndTurn}>结束出牌</button>}
                             {selectedCard?.name === TrickCardName.IRON_CHAIN && !isNonToggleSkillActive && (
                                 <>
                                     <button className="btn btn-skill" onClick={handleRecast}>重铸</button>
@@ -1902,6 +2561,10 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                             disabled={activeSkillId === 'huanggai_kurou'
                                                 && activeGeneral?.generalId === 'huanggai_jie'
                                                 && selectedCardIds.length !== 1}
+                                            title={activeSkillId === 'huanggai_kurou'
+                                                && activeGeneral?.generalId === 'huanggai_jie'
+                                                && selectedCardIds.length !== 1
+                                                ? '界苦肉需先选 1 张手牌或装备牌' : '确认发动该技能'}
                                             onClick={handleConfirmSkill}>确认发动</button>
                                         <button className="btn btn-secondary" onClick={handleCancelSkill}>取消</button>
                                     </>
@@ -1917,6 +2580,8 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                             </span>
                             <button className="btn btn-primary"
                                 disabled={selectedCardIds.length === 0 || selectedCardIds.length > discardNeed}
+                                title={selectedCardIds.length === 0 ? '先选要弃置的牌'
+                                    : selectedCardIds.length > discardNeed ? `最多只能弃 ${discardNeed} 张` : '弃置所选（空格）'}
                                 onClick={handleDiscard}>
                                 弃置所选
                             </button>
@@ -2102,7 +2767,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     <button className="btn"
                                         onClick={() => handleRespond(undefined, { action: 'decline' })}>放弃</button>
                                 </>
-                            ) : (pendingResponse.context as any)?.skillId === 'xiaoqiao_tianxiang_luoshu' ? (() => {
+                            ) : (pendingResponse.context as any)?.skillId === 'xiaoqiao_tianxiang' ? (() => {
                                 // 天香：点选♥手牌，并可同时点选伤害转移目标
                                 const selfIdx = pendingResponse.targetGeneralIndex
                                 const txTargets = selectedTargets.filter(i => i !== selfIdx)
@@ -2235,15 +2900,23 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                         return (
                             <>
                                 <span className="skill-confirm-label">
-                                    忠勇：点击一名其他角色，然后选择交给其的牌
+                                    {zy.zhongyongAll
+                                        ? '忠勇：点击一名其他角色，将【杀】与【闪】一并交给其'
+                                        : '忠勇：点击一名其他角色，然后选择交给其的牌'}
                                 </span>
-                                {zy.attackCardId && (
+                                {zy.zhongyongAll && (
+                                    <button className="btn btn-skill" disabled={!hasTarget}
+                                        onClick={() => emit.respond({ action: 'confirm', targetIndex: selectedTargets[0] } as any)}>
+                                        交出其牌{zy.attackCardLabel ? `（${zy.attackCardLabel}）` : ''}
+                                    </button>
+                                )}
+                                {!zy.zhongyongAll && zy.attackCardId && (
                                     <button className="btn btn-skill" disabled={!hasTarget}
                                         onClick={() => emit.respond({ action: 'give_slash', targetIndex: selectedTargets[0] } as any)}>
                                         交【杀】{zy.attackCardLabel ? `（${zy.attackCardLabel}）` : ''}
                                     </button>
                                 )}
-                                {(zy.dodgeCardIds?.length ?? 0) > 0 && (
+                                {!zy.zhongyongAll && (zy.dodgeCardIds?.length ?? 0) > 0 && (
                                     <button className="btn btn-skill" disabled={!hasTarget}
                                         onClick={() => emit.respond({ action: 'give_dodge', targetIndex: selectedTargets[0] } as any)}>
                                         交【闪】{zy.dodgeCardLabel ? `（${zy.dodgeCardLabel}）` : ''}
@@ -2268,20 +2941,33 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                     )}
                     {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.JUDGE_INTERVENE && (() => {
                         const responderView = gameState.generals[pendingResponse.targetGeneralIndex]
+                        const huanshiOwnerIndex = (pendingResponse.context as any)?.huanshiOwnerIndex as number | undefined
+                        const huanshiOwner = huanshiOwnerIndex !== undefined
+                            ? gameState.generals[huanshiOwnerIndex] : undefined
                         const isZhangjiao = responderView?.generalId === 'zhangjiao'
-                        const isHuanshi = getGeneralById(responderView?.generalId ?? '')?.skills
-                            .some(s => s.id === 'zhugejin_huanshi') ?? false
+                        const isHuanshi = !!huanshiOwner
                         return (
                             <>
                                 <span className="skill-confirm-label">
-                                    {isZhangjiao
-                                        ? '鬼道：选一张黑色牌替换判定牌（手牌或装备区）'
-                                        : isHuanshi
-                                            ? '缓释：选一张手牌或装备牌替换判定牌'
+                                    {isHuanshi
+                                        ? `缓释：从【${GENERAL_NAMES[huanshiOwner.generalId] ?? huanshiOwner.generalId}】的手牌中选择一张替换判定牌`
+                                        : isZhangjiao
+                                            ? '鬼道：选一张黑色牌替换判定牌（手牌或装备区）'
                                             : '修改判定：选一张手牌替换'}
                                 </span>
-                                <button className="btn btn-skill" disabled={selectedCardIds.length === 0}
-                                    onClick={() => handleRespond(selectedCardIds[0])}>替换判定牌</button>
+                                {isHuanshi ? (
+                                    <div className="trick-pick-grid">
+                                        {(huanshiOwner.hand ?? []).map((card: Card) => (
+                                            <button key={card.id} className="btn btn-skill"
+                                                onClick={() => handleRespond(card.id)}>
+                                                {getValueStr(card.value)}{getSuitSymbol(card.suit)} {cardNameOf(card.name)}
+                                            </button>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <button className="btn btn-skill" disabled={selectedCardIds.length === 0}
+                                        onClick={() => handleRespond(selectedCardIds[0])}>替换判定牌</button>
+                                )}
                                 <button className="btn" onClick={() => handleRespond(undefined)}>放弃</button>
                             </>
                         )
@@ -2331,20 +3017,25 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                 onClick={() => handleRespond(undefined, { action: 'damage' } as any)}>受1伤</button>
                         </>
                     )}
-                    {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.SKILL_FANJIAN_CHOICE && (
-                        <>
-                            <span className="skill-confirm-label">
-                                反间：弃置所有{(((pendingResponse.context as any)?.fanjianSuit) === 'heart' || ((pendingResponse.context as any)?.fanjianSuit) === 'diamond') ? '红桃/方块' : '黑桃/梅花'}
-                                同花色手牌，或失去1点体力：
-                            </span>
-                            <button className="btn btn-skill"
-                                onClick={() => handleRespond(undefined, { action: 'discard' } as any)}>
-                                展示并弃同花色牌
-                            </button>
-                            <button className="btn btn-danger"
-                                onClick={() => handleRespond(undefined, { action: 'loseHp' } as any)}>失去1点体力</button>
-                        </>
-                    )}
+                    {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.SKILL_FANJIAN_CHOICE && (() => {
+                        const fjSuit = (pendingResponse.context as any)?.fanjianSuit
+                        const fjTarget = generals[pendingResponse.targetGeneralIndex]
+                        const fjCount = fjTarget?.hand?.filter(c => c.suit === fjSuit).length ?? 0
+                        return (
+                            <>
+                                <span className="skill-confirm-label">
+                                    反间：弃置所有{(fjSuit === 'heart' || fjSuit === 'diamond') ? '红桃/方块' : '黑桃/梅花'}
+                                    同花色手牌（当前{fjCount}张，至少两张），或失去1点体力：
+                                </span>
+                                <button className="btn btn-skill" disabled={fjCount < 2}
+                                    onClick={() => handleRespond(undefined, { action: 'discard' } as any)}>
+                                    展示并弃同花色牌
+                                </button>
+                                <button className="btn btn-danger"
+                                    onClick={() => handleRespond(undefined, { action: 'loseHp' } as any)}>失去1点体力</button>
+                            </>
+                        )
+                    })()}
                     {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.SKILL_GANGLIE_TARGET && (
                         <>
                             <span className="skill-confirm-label">刚烈：选择一名敌方角色判定：</span>
@@ -2359,7 +3050,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                     )}
                     {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.SKILL_DIANHU_TARGET && (
                         <>
-                            <span className="skill-confirm-label">点虎：选择一名其他角色：</span>
+                            <span className="skill-confirm-label">点虎：选择一名敌方角色获得“筹进”：</span>
                             {(((pendingResponse.context as any)?.candidateIndices as number[]) ?? []).map((idx: number) => (
                                 <button key={idx} className="btn btn-skill"
                                     onClick={() => handleRespond(undefined, { targetIndex: idx } as any)}>
@@ -2536,7 +3227,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                     {/* 通用：选择自己的一张牌 */}
                     {/* 纵玄（界虞翻）：把因弃置进入弃牌堆的牌置于牌堆顶 */}
                     {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.SKILL_PICK_CARD
-                        && (pendingResponse.context as any)?.skillId === 'yufan_zongxuan' && (() => {
+                        && ['yufan_zongxuan', 'yufan_jie_zongxuan'].includes((pendingResponse.context as any)?.skillId) && (() => {
                         const ids: string[] = (pendingResponse.context as any)?.candidateCardIds ?? []
                         const choices = discardPile.filter((c: Card) => ids.includes(c.id))
                         const toggle = (id: string) => setZongxuanPicked((prev) => prev.includes(id)
@@ -2613,7 +3304,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                     })()}
                     {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.SKILL_PICK_CARD
                         && (pendingResponse.context as any)?.skillId !== 'fazheng_xuanhuo_gain'
-                        && (pendingResponse.context as any)?.skillId !== 'yufan_zongxuan' && (() => {
+                        && !['yufan_zongxuan', 'yufan_jie_zongxuan'].includes((pendingResponse.context as any)?.skillId) && (() => {
                         const pctx = pendingResponse.context as any
                         const need = Math.max(1, pctx?.count ?? 1)
                         const minNeed = Math.max(1, Math.min(need, Number(pctx?.minCount ?? 1)))
@@ -2852,13 +3543,14 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                             </>
                         )
                     })()}
-                    {/* 反馈：选来源的牌 */}
+                    {/* 反馈 / 利驭：选来源的牌 */}
                     {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.SKILL_FANKUI_PICK && (() => {
                         const ctx = pendingResponse.context as any
                         const src = gameState.generals[ctx.sourceGeneralIndex]
+                        const liyu = !!ctx.liyu
                         return (
                             <>
-                                <span className="skill-confirm-label">反馈：选择获取来源的一张牌</span>
+                                <span className="skill-confirm-label">{liyu ? '利驭' : '反馈'}：选择获取来源的一张牌</span>
                                 {src && (src.handCount ?? 0) > 0 && (
                                     <button className="btn btn-secondary" onClick={() => {
                                         // 随机选一张手牌ID（客户端不知道具体哪张）
@@ -2877,6 +3569,28 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                 {src?.equip?.minus_horse && (
                                     <button className="btn btn-skill" onClick={() => emit.respond({ cardId: src.equip.minus_horse!.id } as any)}>-1马</button>
                                 )}
+                                {liyu && (src?.judgeZone ?? []).map((c: any) => (
+                                    <button key={c.id} className="btn btn-skill"
+                                        onClick={() => emit.respond({ cardId: c.id } as any)}>
+                                        判定区·{cardNameOf(c.name)}
+                                    </button>
+                                ))}
+                            </>
+                        )
+                    })()}
+                    {/* 尚义：观看目标手牌并选一张获得 */}
+                    {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.SKILL_SHANGYI_PICK && (() => {
+                        const ctx = pendingResponse.context as any
+                        const cards = (ctx.shangyiCards ?? []) as any[]
+                        return (
+                            <>
+                                <span className="skill-confirm-label">尚义：选择获得目标的一张手牌</span>
+                                {cards.map((c: any) => (
+                                    <button key={c.id} className="btn btn-skill"
+                                        onClick={() => emit.respond({ cardId: c.id } as any)}>
+                                        {cardNameOf(c.name)}
+                                    </button>
+                                ))}
                             </>
                         )
                     })()}
@@ -3215,20 +3929,43 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                             </button>
                         </>
                     )}
-                    {/* 麒麟弓：选择弃哪匹马 */}
-                    {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.EQUIP_KYLIN_BOW_CHOICE && (
-                        <>
-                            <span className="skill-confirm-label">麒麟弓：选择弃目标哪匹马</span>
-                            <button className="btn btn-skill"
-                                onClick={() => emit.respond({ action: 'plus' } as any)}>
-                                弃+1马
-                            </button>
-                            <button className="btn btn-skill"
-                                onClick={() => emit.respond({ action: 'minus' } as any)}>
-                                弃-1马
-                            </button>
-                        </>
-                    )}
+                    {/* 麒麟弓：选择弃哪匹马 / 加强版任意装备 */}
+                    {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.EQUIP_KYLIN_BOW_CHOICE && (() => {
+                        const kbCtx = pendingResponse.context as any
+                        const kbTarget = gameState.generals[kbCtx.targetIndex]
+                        if (kbCtx.anyEquip) {
+                            const slots: Array<[string, string, any]> = [
+                                ['weapon', '武器', kbTarget?.equip?.weapon],
+                                ['armor', '防具', kbTarget?.equip?.armor],
+                                ['plus_horse', '+1马', kbTarget?.equip?.plus_horse],
+                                ['minus_horse', '-1马', kbTarget?.equip?.minus_horse],
+                            ]
+                            return (
+                                <>
+                                    <span className="skill-confirm-label">麒麟弓：选择弃目标装备区的一张牌</span>
+                                    {slots.filter(([, , c]) => c).map(([action, label, c]) => (
+                                        <button key={action} className="btn btn-skill"
+                                            onClick={() => emit.respond({ action } as any)}>
+                                            {label}：{cardNameOf(c.name)}
+                                        </button>
+                                    ))}
+                                </>
+                            )
+                        }
+                        return (
+                            <>
+                                <span className="skill-confirm-label">麒麟弓：选择弃目标哪匹马</span>
+                                <button className="btn btn-skill"
+                                    onClick={() => emit.respond({ action: 'plus' } as any)}>
+                                    弃+1马
+                                </button>
+                                <button className="btn btn-skill"
+                                    onClick={() => emit.respond({ action: 'minus' } as any)}>
+                                    弃-1马
+                                </button>
+                            </>
+                        )
+                    })()}
                     {/* 寒冰剑：选择弃目标的牌 */}
                     {myPendingResponse && isViewingResponding && pendingResponse?.type === ResponseType.EQUIP_ICE_SWORD_PICK && (() => {
                         const iceCtx = pendingResponse.context as any
@@ -3345,6 +4082,8 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     const hasHuomo = rGeneral?.generalId === 'zhongyao'
                                     const hasShifei = rGeneral?.generalId === 'guotu'
                                         && !(pendingResponse.context as any)?.shifeiTried
+                                    const hasWeijing = getGeneralById(rGeneral?.generalId ?? '')?.skills
+                                        .some(s => s.id === 'luzhi_weijing') ?? false
                                     const hasLonghun = getGeneralById(rGeneral?.generalId ?? '')?.skills
                                         .some(s => s.id === 'shenzhaoyun_longhun') ?? false
                                     return (
@@ -3366,6 +4105,14 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                                 <button className="btn btn-skill"
                                                     onClick={() => emit.respond({ action: 'eight_trigrams' } as any)}>
                                                     八卦阵判定
+                                                </button>
+                                            )}
+                                            {hasWeijing && (
+                                                <button className="btn btn-skill"
+                                                    disabled={(rGeneral as any).weijingRound !== undefined
+                                                        && (rGeneral as any).weijingRound === gameState.roundState?.roundNumber}
+                                                    onClick={() => emit.respond({ action: 'weijing_dodge' } as any)}>
+                                                    卫境（视为使用闪）
                                                 </button>
                                             )}
                                             {hasQingguo && (
@@ -3401,6 +4148,21 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                         </button>
                                     )
                                 })()}
+                                {/* 卫境（鲁芝）：决斗 / 南蛮万箭入口，每轮限一次视为使用【杀】 */}
+                                {(pendingResponse?.type === ResponseType.ATTACK_DUEL || pendingResponse?.type === ResponseType.AOE_ATTACK) && (() => {
+                                    const wjGen = generals[pendingResponse.targetGeneralIndex]
+                                    const wjSkill = getGeneralById(wjGen?.generalId ?? '')?.skills
+                                        .some(s => s.id === 'luzhi_weijing') ?? false
+                                    if (!wjSkill) return null
+                                    const wjUsed = (wjGen as any)?.weijingRound !== undefined
+                                        && (wjGen as any).weijingRound === gameState.roundState?.roundNumber
+                                    return (
+                                        <button className="btn btn-skill" disabled={wjUsed}
+                                            onClick={() => handleRespond(undefined, { action: 'weijing_slash' } as any)}>
+                                            卫境（视为使用【杀】）
+                                        </button>
+                                    )
+                                })()}
                                 <button className="btn btn-secondary" disabled={selectedCardIds.length === 0}
                                     onClick={() => handleRespond(selectedCardIds[0])}>出牌响应</button>
                                 <button className="btn" onClick={() => handleRespond(undefined)}>放弃响应</button>
@@ -3413,14 +4175,18 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
             <div className="game-log-sidebar-header">
                 <span>{isSpectator ? '👁 观战中' : '游戏日志'}</span>
                 <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn-surrender" title="让规则 AI 评一下这一手"
+                        onClick={openCoach}>
+                        教练
+                    </button>
                     {!isSpectator && (
-                        <button className="btn-surrender" title="调整 AI 出牌的播放速度"
+                        <button className="btn-surrender" title="正常：放慢 AI 的行动，方便看清每一步；快速：当前速度"
                             onClick={() => {
-                                const next = pace === 320 ? 90 : pace === 90 ? 0 : 320
+                                const next = pace >= 500 ? 320 : 700
                                 setLocalPace(next)
                                 setPace(next)
                             }}>
-                            节奏：{pace === 0 ? '瞬时' : pace <= 120 ? '快速' : '正常'}
+                            节奏：{pace >= 500 ? '正常' : '快速'}
                         </button>
                     )}
                     <button className="btn-surrender" title="点击日志复制复盘 ID；Shift+点击清空清单"
@@ -3429,9 +4195,9 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                     </button>
                     {!isSpectator && (
                         <button className="btn-surrender" onClick={() => {
-                            if (window.confirm('确定要新开一局吗？')) {
-                                dispatchLocalRestart()
-                                navigate('/pick')
+                            if (window.confirm('返回模式选择？（本局进度不会保留）')) {
+                                exitLocalMatch()
+                                navigate('/')
                             }
                         }}>新开一局</button>
                     )}
@@ -3453,9 +4219,67 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                 )}
             </div>
           </div>
+            {aiThinking && (
+                <div className="ai-thinking" title="对方正在决策">
+                    <span className="dot" />对方思考中
+                </div>
+            )}
+            {playBanner && <div className="play-banner" key={playBanner.key}>{playBanner.name}</div>}
+            <FxLayer ref={fxRef} />
         </div>
-        {fx && fx.kind === 'pointer' && fx.card && (
-            <div className="fx-card-flight" key={fx.key}>{fx.card}</div>
+        {showCoach && (
+            <div className="discard-modal-backdrop" onClick={() => setShowCoach(false)}>
+                <div className="discard-modal" onClick={(ev) => ev.stopPropagation()}>
+                    <div className="discard-modal-header">
+                        <span>教练建议（与规则 AI 共用评分表）</span>
+                        <button className="btn" onClick={() => setShowCoach(false)}>关闭</button>
+                    </div>
+                    <div className="discard-modal-list">
+                        {coachTips.length === 0 && (
+                            <div className="discard-empty">当前不是你的出牌阶段，或没有可用的动作</div>
+                        )}
+                        {coachTips.map((tip, i) => (
+                            <div key={tip.key} className="discard-modal-card" style={{ textAlign: 'left' }}>
+                                <span className="dmc-name">
+                                    {i + 1}. {tip.label} · {tip.turnValue} 分
+                                    <span style={{ color: 'var(--color-text-dim)' }}>
+                                        （收益 {tip.gain} / 风险 {tip.risk} / 战略 {tip.strategic}）
+                                    </span>
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )}
+        {showPool && poolStats && (
+            <div className="discard-modal-backdrop" onClick={() => setShowPool(false)}>
+                <div className="discard-modal" onClick={(ev) => ev.stopPropagation()}>
+                    <div className="discard-modal-header">
+                        <span>记牌器 · 未露面 {poolStats.unseen} 张</span>
+                        <button className="btn" onClick={() => setShowPool(false)}>关闭</button>
+                    </div>
+                    <div className="discard-modal-list">
+                        {poolStats.cards.map((c) => (
+                            <div key={c.key} className="discard-modal-card"
+                                title={`${c.label}：尚未露面 ${c.left} 张${c.played > 0 ? `，已使用/弃置 ${c.played} 张` : ''}`}>
+                                <span className="dmc-name">【{c.label}】剩 {c.left}{c.played > 0 ? ` · 出 ${c.played}` : ''}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="discard-modal-header">
+                        <span>敌方手牌（只公开牌数）</span>
+                    </div>
+                    <div className="discard-modal-list">
+                        {poolStats.enemies.length === 0 && <div className="discard-empty">无存活敌人</div>}
+                        {poolStats.enemies.map((e) => (
+                            <div key={e.name} className="discard-modal-card">
+                                <span className="dmc-name">{e.name}：{e.hand} 张（明牌 {e.known}）</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
         )}
         {showDiscard && (
             <div className="discard-modal-backdrop" onClick={() => setShowDiscard(false)}>

@@ -1,5 +1,6 @@
 import { Faction } from 'sgs3v3-shared'
 import { getGeneralById } from './generals'
+import { draftScore } from './local-ai'
 import { POSITION_ROLE_BY_ID, roleOfGeneral } from './position-roles'
 import {
     bestDeployment, firstFlankOf, pickValue, positionScore, rankDeployments,
@@ -92,6 +93,21 @@ console.log('[位置职责校准]')
     check('界张飞暖B高于暖主', warm('zhangfei_jie', 'flankB') > warm('zhangfei_jie', 'commander'))
     check('吕布竞暖B高于暖主', warm('lvbu_jing', 'flankB') > warm('lvbu_jing', 'commander'))
     check('界张辽冷主分高于冷边锋', cold('zhangliao_jie', 'commander') > cold('zhangliao_jie', 'flankB'))
+    check('夏侯惇竞不是冷主（无控制/保护）', cold('xiahoudun_jing', 'flankB') > cold('xiahoudun_jing', 'commander'))
+    check('肉盾边锋优先于双主帅', ['caocao', 'sunce', 'sunjian'].every((id) =>
+        cold(id, 'flankB') > cold(id, 'commander') && warm(id, 'flankB') > warm(id, 'commander')))
+    check('马超不适合主帅（马术也不补）', cold('machao', 'commander') < cold('xiahoudun_jing', 'commander'))
+    check('菜刀不当主帅（有辅助时）',
+        bestDeployment(['zhangfei', 'machao', 'guojia'].map(d), ctx(Faction.COOL)).assignment.commander?.id === 'guojia')
+}
+
+console.log('[抓将评分]')
+{
+    const score = (id: string, mine: string[] = [], rival: string[] = []) =>
+        draftScore(d(id), mine.map(d), rival.map(d), { faction: Faction.COOL, pickStep: 0 }).total
+    check('克制：对郭嘉时张辽分更高', score('zhangliao', [], ['guojia']) > score('zhangliao'))
+    check('阵容完整：郭嘉在队时优先补边锋', score('zhangfei', ['guojia']) > score('liubei', ['guojia']))
+    check('联动：郭嘉在队时张飞分更高', score('zhangfei', ['guojia']) > score('zhangfei'))
 }
 
 if (failures > 0) {

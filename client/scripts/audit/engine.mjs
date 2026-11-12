@@ -5,7 +5,7 @@
 import { build } from 'esbuild'
 import { spawn } from 'node:child_process'
 import {
-    existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+    existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,18 +27,32 @@ export function ensureDirs() {
     }
 }
 
+/**
+ * 打包审计 bundle。
+ *
+ * 必须走「写临时文件 → 原子改名」：两条流水线（或多个 agent）同时跑时，直接写同一个
+ * outfile 会让另一方的子进程读到写了一半的 CJS，报出 `SyntaxError: Invalid or unexpected
+ * token` 或 `ReferenceError: xxx is not defined` 这类假崩溃，并把 failures 计进统计。
+ */
 export async function ensureBundle() {
     mkdirSync(dirname(BUNDLE), { recursive: true })
+    const temp = `${BUNDLE}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`
     await build({
         entryPoints: [join(clientDir, 'src/engine/_audit.ts')],
         bundle: true,
         platform: 'node',
         format: 'cjs',
         loader: { '.css': 'empty' },
-        outfile: BUNDLE,
+        outfile: temp,
         logLevel: 'warning',
     })
-    return BUNDLE
+    try {
+        renameSync(temp, BUNDLE)
+        return BUNDLE
+    } catch {
+        // Windows 上目标可能正被其他进程打开；临时文件本身是完整的，直接用它。
+        return temp
+    }
 }
 
 export function readJsonl(path) {

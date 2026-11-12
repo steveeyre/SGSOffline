@@ -12,8 +12,9 @@ const POS_LABEL: Record<Position, string> = {
 
 const POOLS: Array<{ version: GeneralPoolVersion; label: string }> = [
     { version: 'classic2013', label: '2013 版' },
-    { version: 'custom', label: '平衡版' },
-    { version: 'luoshu', label: '洛书版' },
+    { version: 'balance', label: '平衡版' },
+    { version: 'balance_ext', label: '平衡扩展版' },
+    { version: 'brawl', label: '乱斗版' },
 ]
 
 type ScoreSet = Record<Position, number>

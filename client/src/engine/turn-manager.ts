@@ -15,8 +15,10 @@ import {
 } from 'sgs3v3-shared'
 import { drawCards, ensureDeck } from './deck'
 import { addLog, getActiveGeneral, getHandLimit, getAttackRange, resetActedFlags, maybeChunlaoPickup, isSlashLikeCard } from './game-state'
-import { getGeneralById } from './generals'
+import { getGeneralById, skillMatches } from './generals'
 import { anyoneHasNegate, cardDisplayName, cardFullName } from './card-utils'
+import { resetSkillUses } from './skill-limit'
+import { noteDeckDraws } from './combat-stats'
 import {
     dealDamage, triggerQingzheng, triggerXiashu, triggerKuanshi, triggerLizhan,
     triggerShenduan, triggerYonglueQueue, triggerZhendanDraw, triggerJuejing,
@@ -26,6 +28,8 @@ import {
     triggerMumu, triggerShanjia, triggerChenqing, triggerMoshi, triggerGuanwei,
     triggerYimou, triggerShefu, triggerTunchu, triggerShuliang, triggerXianfuChoose,
     triggerXianfuDamage, triggerXianfuHeal, triggerLingjuFenxin, maybeZongxuan, triggerZhimeng,
+    triggerFensi, startJuetao, triggerPitian, restoreChuanwu, triggerGoude, triggerDaili, maybeZhuri,
+    maybePingjian, expirePingjian, resolveNishouPendingSwap, maybeHongyuan, checkZhuwei,
 } from './game-actions'
 import { bumpLandlordRound, nextLandlordSeat } from '../modes/FightTheLandlord/landlord-turn'
 import { bumpPairRound, nextPairSeat } from '../modes/HappyPair/pair-turn'
@@ -141,8 +145,9 @@ export function chooseActionUnit(
     if (rs.currentActionStep === 0) {
         if (faction !== rs.firstMover) return { error: '等待先手方选择' }
 
-        const err = validateUnitChoice(state, faction, unit)
-        if (err) return err
+        const pick = resolveUnitChoice(state, faction, unit)
+        if ('error' in pick) return pick
+        unit = pick.unit
 
         rs.firstMoverChoice = unit
         if (unit === ActionUnitType.FLANKS && flankOrder) {
@@ -161,8 +166,9 @@ export function chooseActionUnit(
     if (rs.currentActionStep === 2) {
         if (faction !== secondMover) return { error: '等待后手方选择' }
 
-        const err = validateUnitChoice(state, faction, unit)
-        if (err) return err
+        const pick = resolveUnitChoice(state, faction, unit)
+        if ('error' in pick) return pick
+        unit = pick.unit
 
         rs.secondMoverChoice = unit
         if (unit === ActionUnitType.FLANKS && flankOrder) {
@@ -197,6 +203,24 @@ export function chooseActionUnit(
     }
 
     return { error: '当前不是选择行动单元的时机' }
+}
+
+/**
+ * 选定的单元没有可行动角色时改用另一个单元。
+ * 客户端只剩一个“继续”按钮，若它总是发 FLANKS，边锋全灭的那一侧就会
+ * 反复被拒绝、界面停在这一步（表现为“没有按钮可点”）。
+ * @returns 实际采用的单元，或错误信息
+ */
+function resolveUnitChoice(
+    state: GameState,
+    faction: Faction,
+    unit: ActionUnitType,
+): { unit: ActionUnitType } | { error: string } {
+    const err = validateUnitChoice(state, faction, unit)
+    if (!err) return { unit }
+    const alt = unit === ActionUnitType.COMMANDER ? ActionUnitType.FLANKS : ActionUnitType.COMMANDER
+    if (!validateUnitChoice(state, faction, alt)) return { unit: alt }
+    return { error: err.error }
 }
 
 /** 验证行动单元选择是否有效 */
@@ -372,6 +396,10 @@ export function runTurnStart(state: GameState): void {
 
     const name = getGeneralName(general)
 
+    // 星卜（谯周）的“下个回合”效果只在该回合有效，未用掉的部分在回合开始时作废
+    general.drawPhaseBonus = 0
+    general.skipDiscardPhase = false
+
     // ── 翻面：背面朝上的角色在其回合开始时翻回正面并跳过整个回合
     if (general.flipped) {
         general.flipped = false
@@ -386,16 +414,34 @@ export function runTurnStart(state: GameState): void {
     addLog(state, `【${name}】回合开始`)
     state.turnPhase = TurnPhase.TURN_START
     state.turnSerial = (state.turnSerial ?? 0) + 1
+    // 轮次：每名存活角色各行动一次记为一轮（“每轮限一次”以此为基准）
+    const roundSelfIdx = state.generals.indexOf(general)
+    if ((state.roundSeen ?? []).includes(roundSelfIdx)) {
+        state.roundSerial = (state.roundSerial ?? 0) + 1
+        state.roundSeen = []
+    }
+    state.roundSeen = [...(state.roundSeen ?? []), roundSelfIdx]
     state.attackUsedThisTurn = 0
+    resetSkillUses(general)
     general.wineDrunk = false
     general.wineBonusAttackNo = undefined
     general.skillsUsedThisTurn = []
     general.rendeGivenThisTurn = 0
     general.rendeHealedThisTurn = false
+    general.rendeReceivedThisPhase = []
+    general.rendeSecondGivenThisTurn = false
     // 回合级通用状态位清零（供新武将技能使用）
     general.damageTakenThisTurn = 0
     general.damageDealtThisTurn = 0
     general.lastUsedCard = undefined
+    // “本回合获得的牌”统计（腹鳞、承诏）只在本回合有效
+    general.gainedCardsThisTurn = 0
+    // 好施（界鲁肃）：“直到你的下个回合开始”的受益者标记在自己回合开始时作废
+    general.haoshiGuardReceiver = undefined
+    // 博图（界吕蒙）：记录弃牌堆快照，回合结束时用它判断本回合置入弃牌堆的牌是否凑齐四种花色
+    general.discardBaseline = hasSkillById(general, 'lvmeng_jie_botu')
+        ? state.discard.map((c) => c.id)
+        : undefined
     general.fenxunTargetIndex = undefined
     general.duwuLockedThisPhase = false
     // 平衡版新武将的回合级状态
@@ -408,6 +454,21 @@ export function runTurnStart(state: GameState): void {
     general.forbiddenTargetTurn = undefined
     general.cannotUseHandTurn = undefined
     general.damageTakenBonusTurn = undefined
+    general.yijueHeartBonusTurn = undefined
+    general.yijueHeartTarget = undefined
+    general.gainedCardIdsThisTurn = []
+    general.luechengSlashIds = []
+    general.luechengTarget = undefined
+    general.luechengTurn = undefined
+    general.manwangStep = 0
+    general.panqinDiscardIds = []
+    general.panqinPhaseKey = undefined
+    general.zuolianUsesPhase = 0
+    // 义绝（界关羽）：非锁定技失效与禁用手牌只持续到当前回合结束
+    for (const g of state.generals) {
+        g.yijueNoSkillTurn = undefined
+        if (g !== general) g.cannotUseHandTurn = undefined
+    }
     general.extraSlashCount = 0
     general.qiangxiUsesPhase = 0
     general.qiangxiTargetsPhase = []
@@ -419,6 +480,8 @@ export function runTurnStart(state: GameState): void {
     general.chenglueSuits = []
     general.usedCardCategories = []
     general.basicUsedThisTurn = []
+    // 燃己（谋姜维）：阶段数按自己回合内的用牌阶段统计
+    general.usedCardPhases = []
     general.infiniteRangePhase = false
     general.yanyuRecast = 0
     general.handLimitDelta = 0
@@ -468,6 +531,26 @@ export function runTurnStart(state: GameState): void {
     // 洛书版扩展（七）：龙临（闪赵云）的“只能指定自己”限制
     general.onlySelfTargetPhase = false
 
+    // 星卜（谯周）：上回合亮出红牌数对应的效果，在自己的下个回合开始时生效
+    if (general.xingbuMode) {
+        const mode = general.xingbuMode
+        general.xingbuMode = undefined
+        if (mode === 'three') {
+            general.drawPhaseBonus = (general.drawPhaseBonus ?? 0) + 2
+            general.slashLimitDelta = (general.slashLimitDelta ?? 0) + 1
+            addLog(state, `【${name}】的【星卜】生效：摸牌阶段多摸两张牌，本回合使用【杀】次数上限+1`)
+        } else if (mode === 'two') {
+            general.slashLimitDelta = (general.slashLimitDelta ?? 0) - 1
+            general.skipDiscardPhase = true
+            addLog(state, `【${name}】的【星卜】生效：本回合使用【杀】次数上限-1，跳过弃牌阶段`)
+        } else {
+            general.prepDiscardPending = (general.prepDiscardPending ?? 0) + 1
+            addLog(state, `【${name}】的【星卜】生效：准备阶段须弃置一张手牌`)
+        }
+    }
+    // 立牧（刘焉）：出牌阶段限一次，随回合重置
+    general.limuUsedPhase = false
+
     // “本回合”语义的状态位：每次都回合都需要对全体清零
     // - damageTakenThisTurn：矢北判定“本回合第一次受伤”（可能在别人的回合受伤）
     // - zhichiImmuneTurn：智迟的免疫只持续到受伤所在回合结束
@@ -510,6 +593,15 @@ export function runTurnStart(state: GameState): void {
         }
     }
 
+    // 劫营①（神甘宁）：回合开始时，若没有有“营”标记的角色，获得“营”
+    if (hasSkillById(general, 'ganning_shen_jieying') && !state.generals.some(g => g.yingMark)) {
+        general.yingMark = true
+        addLog(state, `【${name}】发动【劫营】，获得“营”标记`)
+    }
+
+    // 贵相（族吴苋）：第 X 个阶段改为出牌阶段
+    if (maybeGuixiang(state, general, 'prep')) return
+
     // 跋扈（斗地主地主技）：锁定技，准备阶段摸一张牌
     if (state.mode === GameMode.DOUDIZHU && hasSkillById(general, 'doudizhu_bahu')) {
         const bahuDrawn = drawCards(state, 1)
@@ -517,8 +609,15 @@ export function runTurnStart(state: GameState): void {
         addLog(state, `【${name}】发动【跋扈】，摸${bahuDrawn.length}张牌`)
     }
 
+    // 忿肆（曹髦）：锁定技，准备阶段对一名体力值不小于你的角色造成1点伤害；
+    // 若该角色不是你，其视为对你使用一张【杀】（走完整【杀】结算）
+    if (hasSkillById(general, 'caomao_fensi')) {
+        triggerFensi(state, general)
+    }
+
     // 洛书版扩展（九）：回合级状态
     general.cardsUsedTurnCount = 0
+    ;(general as any).yingyuanCategories = []
     general.moshiCards = []
     general.moshiUseIndex = 0
     general.niguBonus = 0
@@ -532,14 +631,14 @@ export function runTurnStart(state: GameState): void {
     // 惴恐（界伏皇后）：其他角色的回合开始时，若你已受伤，你可以与其拼点
     for (const fh of state.generals) {
         if (!fh.alive || fh === general) continue
-        if (!hasSkillById(fh, 'fuhuanghou_chuikong')) continue
+        if (!hasSkillById(fh, 'fuhuanghou_zhuikong')) continue
         if (fh.hp >= fh.maxHp) continue
         if (fh.hand.length === 0 || general.hand.length === 0) continue
         state.pendingResponseQueue.push({
             type: ResponseType.SKILL_ACTIVATE_CONFIRM,
             targetGeneralIndex: state.generals.indexOf(fh),
             context: {
-                skillId: 'fuhuanghou_chuikong',
+                skillId: 'fuhuanghou_zhuikong',
                 skillName: '惴恐',
                 description: `与【${name}】拼点：若你赢，其本回合使用牌只能指定自己为目标；否则你获得其拼点的牌且其视为对你使用一张【杀】`,
                 chuikongOpponentIndex: state.generals.indexOf(general),
@@ -677,22 +776,30 @@ export function runTurnStart(state: GameState): void {
         addLog(state, `【${name}】发动【凿险】觉醒！减1体力上限，获得【急袭】`)
     }
 
-    // 战神（吕布-竞觉醒技）：已受伤且己方有角色阵亡 → 减1体力上限，弃置装备，获得神戟与马术
-    if (hasSkillById(general, 'lvbu_jing_zhanshen') && !general.awakened
-        && general.hp < general.maxHp
-        && state.generals.some(g => !g.alive && g.faction === general.faction)) {
-        general.awakened = true
-        general.maxHp -= 1
-        if (general.hp > general.maxHp) general.hp = general.maxHp
-        for (const slot of Object.values(EquipSlot)) {
-            const card = general.equip[slot]
-            if (card) {
-                state.discard.push(card)
-                general.equip[slot] = undefined as any
-            }
+    // 战神（吕布-竞）：准备阶段，选择一项未获得的效果获得直到本局结束
+    if (hasSkillById(general, 'lvbu_jing_zhanshen')) {
+        const gained = general.zhanshenEffects ?? []
+        const available: { action: string; label: string }[] = []
+        if (!gained.includes(1)) available.push({ action: '1', label: '摸牌阶段多摸一张牌' })
+        if (!gained.includes(2)) available.push({ action: '2', label: '使用【杀】造成的伤害+1' })
+        if (!gained.includes(3)) available.push({ action: '3', label: '使用【杀】可额外选择一个目标' })
+        if (!gained.includes(4) && hasSkillById(general, 'lvbu_jing_xiaoxiong')
+            && general.seatRole !== SeatRole.COMMANDER) {
+            available.push({ action: '4', label: '出牌阶段可以多使用一张【杀】（先锋技）' })
         }
-        general.acquiredSkills.push('lvbu_jing_shenji', 'lvbu_jing_mashu')
-        addLog(state, `【${name}】发动【战神】觉醒！减1点体力上限，弃置装备区所有牌，获得【神戟】和【马术】`)
+        if (available.length > 0) {
+            state.pendingResponseQueue.push({
+                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                targetGeneralIndex: state.generals.indexOf(general),
+                context: {
+                    skillId: 'lvbu_jing_zhanshen',
+                    skillName: '战神',
+                    description: '选择一项未获得的效果获得直到本局结束',
+                    options: available,
+                },
+            })
+            addLog(state, `【${name}】可发动【战神】选择一项效果`)
+        }
     }
 
     // 返乡（SP孙尚香觉醒技）：已受伤 → 加1体力上限并回复1体力，失去良助获得枭姬
@@ -700,25 +807,36 @@ export function runTurnStart(state: GameState): void {
         && general.hp < general.maxHp) {
         general.awakened = true
         general.maxHp += 1
-        general.hp = Math.min(general.hp + 1, general.maxHp)
+        if (!general.noRecoverUntilKill) general.hp = Math.min(general.hp + 1, general.maxHp)
         general.lostSkills = [...(general.lostSkills ?? []), 'sp_sunshangxiang_liangzhu']
         general.acquiredSkills.push('sunshangxiang_xiaoji')
         addLog(state, `【${name}】发动【返乡】觉醒！体力上限+1并回复1点体力，失去【良助】获得【枭姬】`)
     }
 
-    // 绝地（祖茂）：准备阶段移去所有“引兵”牌，将手牌摸至体力上限
+    // 绝地（祖茂）：准备阶段，若有“引兵”牌，选择一项
     if (hasSkillById(general, 'zumao_juedi') && (general.generalPile?.length ?? 0) > 0) {
-        const count = general.generalPile!.length
-        state.discard.push(...general.generalPile!)
-        general.generalPile = []
-        const need = Math.max(0, general.maxHp - general.hand.length)
-        if (need > 0) {
-            const drawn = drawCards(state, need)
-            general.hand.push(...drawn)
-            addLog(state, `【${name}】发动【绝地】，移去 ${count} 张“引兵”牌并摸了 ${drawn.length} 张牌`)
-        } else {
-            addLog(state, `【${name}】发动【绝地】，移去 ${count} 张“引兵”牌`)
+        const candidates = state.generals
+            .map((g, idx) => ({ g, idx }))
+            .filter(({ g, idx }) => g.alive && idx !== state.generals.indexOf(general) && g.hp <= general.hp)
+            .map(({ idx }) => idx)
+        const juediOptions: { action: string; label: string }[] = [
+            { action: 'draw', label: '移去所有“引兵”牌，将手牌摸至体力上限' },
+        ]
+        if (candidates.length > 0) {
+            juediOptions.push({ action: 'give', label: '令一名体力值不大于你的其他角色获得所有“引兵”牌，然后其回复1点体力并摸等量的牌' })
         }
+        state.pendingResponseQueue.unshift({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(general),
+            context: {
+                skillId: 'zumao_juedi',
+                skillName: '绝地',
+                description: `“引兵”${general.generalPile!.length}张，选择一项`,
+                options: juediOptions,
+                zumaoCandidates: candidates,
+            },
+        })
+        addLog(state, `【${name}】发动【绝地】`)
     }
 
     // 推锋（李通）：准备阶段移去所有“锋”，摸等量牌并获得等量额外【杀】次数
@@ -741,19 +859,26 @@ export function runTurnStart(state: GameState): void {
         // 检查鬼才/缓释介入
         const intervenor = findJudgeIntervenor(state, general)
         if (intervenor) {
+            const huanshiOwnerIndex = hasSkillById(intervenor, 'zhugejin_huanshi')
+                ? state.generals.indexOf(intervenor) : undefined
             state.pendingResponseQueue.push({
                 type: ResponseType.JUDGE_INTERVENE,
-                targetGeneralIndex: state.generals.indexOf(intervenor),
+                targetGeneralIndex: huanshiOwnerIndex !== undefined
+                    ? state.generals.indexOf(general)
+                    : state.generals.indexOf(intervenor),
                 context: {
                     judgeType: 'luoshen',
                     judgingGeneralIndex: state.generals.indexOf(general),
                     judgeCardId: judgeCard.id,
                     judgeCard,
                     judgeName: '洛神',
+                    huanshiOwnerIndex,
                 },
             })
             const skillName = judgeInterveneSkillName(intervenor)
-            addLog(state, `【${getGeneralName(intervenor)}】可发动【${skillName}】修改判定`)
+            addLog(state, huanshiOwnerIndex !== undefined
+                ? `【${getGeneralName(general)}】可选择【${getGeneralName(intervenor)}】的一张手牌发动【${skillName}】修改判定`
+                : `【${getGeneralName(intervenor)}】可发动【${skillName}】修改判定`)
         } else {
             // 无人介入，直接结算
             const isBlack = judgeCard.suit === CardSuit.SPADE || judgeCard.suit === CardSuit.CLUB
@@ -803,11 +928,12 @@ export function runTurnStart(state: GameState): void {
     }
 
     // 魂姿（孙策觉醒技）：准备阶段，体力1→减1上限获得英姿+英魂
-    if (hasSkillById(general, 'sunce_hunzi') && !general.awakened && general.hp === 1) {
+    if ((hasSkillById(general, 'sunce_hunzi') || hasSkillById(general, 'sunce_jie_hunzi'))
+        && !general.awakened && general.hp === 1) {
         general.awakened = true
         general.maxHp -= 1
         if (general.hp > general.maxHp) general.hp = general.maxHp
-        general.acquiredSkills.push('zhouyu_yingzi', 'sunjian_yinghun')
+        general.acquiredSkills.push(general.generalId === 'sunce_jie' ? 'zhouyu_jie_yingzi' : 'zhouyu_yingzi', 'sunjian_yinghun')
         // 界孙策：觉醒回合的结束阶段可再选择摸两张或回复1点体力
         if (general.generalId === 'sunce_jie') general.hunziEndChoice = true
         addLog(state, `【${name}】发动【魂姿】觉醒！减1体力上限，获得【英姿】和【英魂】`)
@@ -831,8 +957,10 @@ export function runTurnStart(state: GameState): void {
     // ── 观星（诸葛亮）：准备阶段，观看牌堆顶X张（X=存活角色数，最多5），分配至牌堆顶/底
     if (hasSkillById(general, 'zhugeliang_guanxing') || general.acquiredSkills.includes('zhugeliang_guanxing')) {
         const alive = state.generals.filter(g => g.alive).length
-        // 界诸葛亮：观看5张（存活角色小于4时改为3张），其余为存活数
-        const base = general.generalId === 'zhugeliang_jie' ? (alive < 4 ? 3 : 5) : Math.min(alive, 5)
+        // 界诸葛亮/界姜维：观看5张（存活角色小于4时改为3张），其余为存活数
+        const base = general.generalId === 'zhugeliang_jie' || general.generalId === 'jiangwei_jie'
+            ? (alive < 4 ? 3 : 5)
+            : Math.min(alive, 5)
         const count = Math.min(base, state.deck.length)
         if (count > 0) {
             const cards = state.deck.splice(0, count)
@@ -903,7 +1031,7 @@ export function runTurnStart(state: GameState): void {
     }
 
     // ── 神速（夏侯渊）：回合开始选择跳阶段视为杀
-    if (hasSkillById(general, 'xiahoyuan_shensu') && !general.skillsUsedThisTurn.includes('xiahoyuan_shensu')) {
+    if (hasSkillById(general, 'xiahouyuan_shensu') && !general.skillsUsedThisTurn.includes('xiahouyuan_shensu')) {
         if (general.generalId === 'xiahouyuan_jie') {
             state.pendingResponseQueue.push({
                 type: ResponseType.SKILL_ACTIVATE_CONFIRM,
@@ -930,7 +1058,7 @@ export function runTurnStart(state: GameState): void {
             type: ResponseType.SKILL_ACTIVATE_CONFIRM,
             targetGeneralIndex: state.generals.indexOf(general),
             context: {
-                skillId: 'xiahoyuan_shensu_1',
+                skillId: 'xiahouyuan_shensu_1',
                 skillName: '神速一',
                 description: '跳过判定和摸牌阶段，视为对一名角色使用一张杀',
             },
@@ -944,6 +1072,11 @@ export function runTurnStart(state: GameState): void {
     // 勇略（韩浩史涣）：其他角色的判定阶段开始时，若其在攻击范围内，可弃其判定牌并视为使用【杀】
     if (triggerYonglueQueue(state, general)) return
 
+    // 星卜（谯周）：准备阶段弃置一张手牌
+    if (triggerXingbuPrepDiscard(state, general)) return
+    // 知命（谯周）：准备阶段摸一张，然后可置顶一张
+    if (triggerZhiming(state, general, 'prep')) return
+
     startJudgePhase(state)
 }
 
@@ -952,6 +1085,8 @@ export function startJudgePhase(state: GameState): void {
     const general = getActiveGeneral(state)
     if (!general) return
     state.turnPhase = TurnPhase.JUDGE
+    // 贵相（族吴苋）：第 X 个阶段改为出牌阶段
+    if (maybeGuixiang(state, general, 'judge')) return
     const { skipAction, skipDraw } = runJudgePhase(state, general)
 
     // 如果判定被鬼才/缓释中断 或 延时锦囊正在询问无懈可击，等待结算
@@ -997,6 +1132,16 @@ function triggerFrontFlipSkills(state: GameState, general: GeneralInstance): voi
 
 /** 摸牌（寸目：许攸改为从牌堆底摸） */
 function drawForTurn(state: GameState, general: GeneralInstance, count: number): Card[] {
+    // 星卜（谯周）：摸牌阶段多摸两张牌
+    if ((general.drawPhaseBonus ?? 0) > 0) {
+        count += general.drawPhaseBonus!
+        general.drawPhaseBonus = 0
+    }
+    // 战神①（吕布-竞）：摸牌阶段多摸一张牌
+    if (hasSkillById(general, 'lvbu_jing_zhanshen')
+        && (general.zhanshenEffects ?? []).includes(1)) {
+        count += 1
+    }
     if (!hasSkillById(general, 'xuyou_cunmu') || state.deck.length === 0) {
         return drawCards(state, count)
     }
@@ -1004,6 +1149,7 @@ function drawForTurn(state: GameState, general: GeneralInstance, count: number):
     for (let i = 0; i < count && state.deck.length > 0; i++) {
         drawn.push(state.deck.pop()!)
     }
+    noteDeckDraws(state, drawn)
     return drawn
 }
 
@@ -1019,9 +1165,16 @@ export function finishJudgePhaseAndContinue(
 ): void {
     const name = getGeneralName(general)
 
+    // 泥首（屈晃）：本阶段结束，执行待结算的手牌交换
+    resolveNishouSwaps(state)
+    // 逐日（谋姜维）：判定阶段结束时手牌数变化则拼点
+    maybeZhuri(state, general)
+
     // ── 摸牌阶段
     if (!skipDraw) {
         state.turnPhase = TurnPhase.DRAW
+        // 贵相（族吴苋）：第 X 个阶段改为出牌阶段
+        if (maybeGuixiang(state, general, 'draw')) return
         // 屯储（李丰）：摸牌阶段，武将牌上没有“粮”时可多摸两张
         triggerTunchu(state, general)
 
@@ -1084,13 +1237,15 @@ export function finishJudgePhaseAndContinue(
             return
         }
 
-        // 好施（鲁肃）：多摸两张，若手牌大于5则将一半交给手牌最少的其他角色
-        if (hasSkillById(general, 'lusu_haoshi')) {
+        // 好施（鲁肃 / 界鲁肃）：多摸两张，若手牌大于5则将一半交给手牌最少的其他角色
+        const haoshiId = hasSkillById(general, 'lusu_jie_haoshi') ? 'lusu_jie_haoshi'
+            : hasSkillById(general, 'lusu_haoshi') ? 'lusu_haoshi' : undefined
+        if (haoshiId) {
             state.pendingResponseQueue.push({
                 type: ResponseType.SKILL_ACTIVATE_CONFIRM,
                 targetGeneralIndex: state.generals.indexOf(general),
                 context: {
-                    skillId: 'lusu_haoshi',
+                    skillId: haoshiId,
                     skillName: '好施',
                     description: '多摸两张牌；若手牌大于5，将一半（向下取整）交给手牌最少的一名其他角色',
                     skipAction,
@@ -1100,30 +1255,29 @@ export function finishJudgePhaseAndContinue(
             return
         }
 
-        // 弘援（诸葛瑾）：摸牌阶段，少摸一张，令至多两名其他己方角色各摸一张（3v3 中就是两名队友，无需选择）
-        if (hasSkillById(general, 'zhugejin_hongyuan')) {
-            const allies = state.generals.filter(g => g.alive && g.faction === general.faction && g !== general)
-            if (allies.length > 0) {
-                state.pendingResponseQueue.push({
-                    type: ResponseType.SKILL_ACTIVATE_CONFIRM,
-                    targetGeneralIndex: state.generals.indexOf(general),
-                    context: {
-                        skillId: 'zhugejin_hongyuan',
-                        skillName: '弘援',
-                        description: '少摸一张牌，令至多两名其他己方角色各摸一张牌',
-                    },
-                })
-                return
-            }
-        }
-
-        // 裸衣（界许褚）：亮出牌堆顶三张，获得其中的基本牌/武器牌/【决斗】并放弃摸牌
-        if (hasSkillById(general, 'xuchu_luoyi') && state.deck.length > 0) {
+        // 弘援（诸葛瑾-竞）：摸牌阶段少摸一张，令至多两名其他角色各摸一张
+        if (hasSkillById(general, 'zhugejin_jing_hongyuan')) {
             state.pendingResponseQueue.push({
                 type: ResponseType.SKILL_ACTIVATE_CONFIRM,
                 targetGeneralIndex: state.generals.indexOf(general),
                 context: {
-                    skillId: 'xuchu_luoyi',
+                    skillId: 'zhugejin_jing_hongyuan',
+                    skillName: '弘援',
+                    description: '少摸一张牌，令至多两名其他角色各摸一张牌',
+                    skipAction,
+                },
+            })
+            addLog(state, `【${name}】可发动【弘援】`)
+            return
+        }
+
+        // 裸衣（界许褚）：亮出牌堆顶三张，获得其中的基本牌/武器牌/【决斗】并放弃摸牌
+        if (hasSkillById(general, 'xuchu_jie_luoyi') && state.deck.length > 0) {
+            state.pendingResponseQueue.push({
+                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                targetGeneralIndex: state.generals.indexOf(general),
+                context: {
+                    skillId: 'xuchu_jie_luoyi',
                     skillName: '裸衣',
                     description: '亮出牌堆顶三张，获得其中的基本牌/武器牌/【决斗】并放弃摸牌，本回合【杀】和【决斗】伤害+1',
                 },
@@ -1150,7 +1304,8 @@ export function finishJudgePhaseAndContinue(
             return
         }
 
-        if (hasSkillById(general, 'zhangliao_tuxi')) {
+        if (hasSkillById(general, 'zhangliao_tuxi')
+            || hasSkillById(general, 'zhanghulelin_tuxi')) {
             const oppWithCards = state.generals.filter(
                 g => g.alive && g.faction !== general.faction && g.hand.length > 0
             )
@@ -1192,28 +1347,18 @@ export function finishJudgePhaseAndContinue(
             if (hasYingziSkill(general)) {
                 drawCount = 3
             }
-
-            if ((general as any).hongyuanActivated) {
-                delete (general as any).hongyuanActivated
-                const drawn = drawCards(state, 1)
-                general.hand.push(...drawn)
-                addLog(state, `【${name}】发动【弘援】，自己摸了1张牌`)
-
-                const chosen = ((general as any).hongyuanAllies as number[] | undefined) ?? []
-                delete (general as any).hongyuanAllies
-                const allies = chosen
-                    .map(idx => state.generals[idx])
-                    .filter(g => g && g.alive && g.faction === general.faction && g !== general)
-                for (const ally of allies) {
-                    const bonus = drawCards(state, 1)
-                    ally.hand.push(...bonus)
-                    addLog(state, `【${getGeneralName(ally)}】因【弘援】摸了1张牌`)
-                }
-            } else {
-                const drawn = drawForTurn(state, general, drawCount)
-                general.hand.push(...drawn)
-                addLog(state, `【${name}】摸了 ${drawn.length} 张牌${drawCount > 2 ? '（英姿+1）' : ''}`)
+            // 劫营（神甘宁）：持有“营”时摸牌阶段多摸一张
+            if (general.yingMark) drawCount += 1
+            // 督粮（李严）：其下个回合摸牌阶段多摸一张
+            if (general.duliangDrawBonus) {
+                general.duliangDrawBonus = false
+                drawCount += 1
             }
+
+            const drawn = drawForTurn(state, general, drawCount)
+            general.hand.push(...drawn)
+            addLog(state, `【${name}】摸了 ${drawn.length} 张牌${drawCount > 2 ? '（英姿+1）' : ''}`)
+            maybeHongyuan(state, general, drawn.length)
         }
     }
 
@@ -1262,6 +1407,7 @@ export function finishJudgePhaseAndContinue(
     if (!skipAction) {
         beginActionPhase(state, general)
     } else {
+        if (maybeSkipDiscardPhase(state, general)) return
         enterDiscardPhase(state, general)
         if (general.hand.length <= getHandLimit(general)) {
             finishTurn(state)
@@ -1284,6 +1430,7 @@ export function finishDrawPhaseAfterXunxun(
         beginActionPhase(state, general)
         return
     }
+    if (maybeSkipDiscardPhase(state, general)) return
     enterDiscardPhase(state, general)
     if (general.hand.length <= getHandLimit(general)) finishTurn(state)
 }
@@ -1328,6 +1475,18 @@ export function resolveDufeng(
 
 /** 进入出牌阶段（独锋等“出牌阶段开始时”技能在此结算） */
 export function beginActionPhase(state: GameState, general: GeneralInstance): void {
+    // 界刘备：仁德按“本阶段”统计受牌者与第二张奖励
+    if (hasSkillById(general, 'liubei_jie_rende')) {
+        general.rendeGivenThisTurn = 0
+        general.rendeReceivedThisPhase = []
+        general.rendeSecondGivenThisTurn = false
+    }
+    // 贵相（族吴苋）：出牌阶段计入本回合的阶段数
+    maybeGuixiang(state, general, 'action')
+    // 泥首（屈晃）：本阶段结束，执行待结算的手牌交换
+    resolveNishouSwaps(state)
+    // 逐日（谋姜维）：摸牌阶段结束时手牌数变化则拼点
+    maybeZhuri(state, general)
     // 奋励（朱桓）：体力值为全场最多，可跳过出牌阶段
     if (hasSkillById(general, 'zhuhuan_fenli')
         && !general.skillsUsedThisTurn.includes('zhuhuan_fenli_action')
@@ -1359,6 +1518,40 @@ export function beginActionPhase(state: GameState, general: GeneralInstance): vo
     state.turnPhase = TurnPhase.ACTION
     state.damageThisActionPhase = 0
     general.infiniteRangePhase = false
+
+    // 清忠（鲁芝）：出牌阶段开始时，可摸两张牌，本阶段结束时与手牌数最少的角色交换手牌
+    if (hasSkillById(general, 'luzhi_qingzhong')) {
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(general),
+            context: {
+                skillId: 'luzhi_qingzhong', skillName: '清忠',
+                description: '摸两张牌，然后本阶段结束时与手牌数最少的角色交换手牌',
+            },
+        })
+        addLog(state, `【${getGeneralName(general)}】可发动【清忠】`)
+    }
+
+    // 决讨（曹髦）：限定技，出牌阶段开始时，若体力值为1，可依次使用牌堆底的牌
+    if (hasSkillById(general, 'caomao_juetao') && general.hp === 1
+        && !general.usedLimitedSkills.includes('caomao_juetao')
+        && state.deck.length > 0
+        && state.generals.some(g => g.alive && g !== general)) {
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(general),
+            context: {
+                skillId: 'caomao_juetao',
+                skillName: '决讨',
+                description: '选择一名角色，依次使用牌堆底的牌直到不能使用为止（只能指定你或该角色为目标）',
+                juetaoCandidates: state.generals
+                    .map((g, idx) => ({ g, idx }))
+                    .filter(({ g, idx }) => g.alive && idx !== state.generals.indexOf(general))
+                    .map(({ idx }) => idx),
+            },
+        })
+        addLog(state, `【${getGeneralName(general)}】可发动【决讨】`)
+    }
 
     // 清正（界曹操）/ 下书（阚泽）：出牌阶段开始时
     triggerQingzheng(state, general)
@@ -1494,7 +1687,7 @@ export function beginActionPhase(state: GameState, general: GeneralInstance): vo
         resolveDufeng(state, general, 'abolish')
     }
 
-    if (hasSkillById(general, 'xiahoyuan_shensu') && !general.skillsUsedThisTurn.includes('xiahoyuan_shensu')) {
+    if (hasSkillById(general, 'xiahouyuan_shensu') && !general.skillsUsedThisTurn.includes('xiahouyuan_shensu')) {
         const hasEquip = general.equip.weapon || general.equip.armor || general.equip.plus_horse || general.equip.minus_horse
         const hasHandEquip = general.hand.some(c => c.category === CardCategory.EQUIPMENT)
         if (hasEquip || hasHandEquip) {
@@ -1502,7 +1695,7 @@ export function beginActionPhase(state: GameState, general: GeneralInstance): vo
                 type: ResponseType.SKILL_ACTIVATE_CONFIRM,
                 targetGeneralIndex: state.generals.indexOf(general),
                 context: {
-                    skillId: 'xiahoyuan_shensu_2',
+                    skillId: 'xiahouyuan_shensu_2',
                     skillName: '神速二',
                     description: '跳过出牌阶段并弃一张装备牌，视为对一名角色使用一张杀',
                 },
@@ -1593,6 +1786,52 @@ function maybeQiaobian(
     return true
 }
 
+/**
+ * 知命（谯周）：准备阶段或弃牌阶段结束时摸一张牌，然后可将一张牌置于牌堆顶。
+ * 返回 true 表示已入队“置顶”询问，当前流程需等待响应。
+ */
+function triggerZhiming(
+    state: GameState,
+    general: GeneralInstance,
+    timing: 'prep' | 'discard',
+): boolean {
+    if (!general.alive || !hasSkillById(general, 'qiaozhou_zhiming')) return false
+    const key = `qiaozhou_zhiming_${timing}`
+    if (general.skillsUsedThisTurn.includes(key)) return false
+    general.skillsUsedThisTurn.push(key)
+    const drawn = drawCards(state, 1)
+    general.hand.push(...drawn)
+    addLog(state, `【${getGeneralName(general)}】发动【知命】，摸${drawn.length}张牌`)
+    if (general.hand.length === 0) return false
+    state.pendingResponseQueue.push({
+        type: ResponseType.SKILL_PICK_CARD,
+        targetGeneralIndex: state.generals.indexOf(general),
+        context: {
+            skillId: 'qiaozhou_zhiming_top', skillName: '知命',
+            description: '你可以将一张手牌置于牌堆顶（不选则放弃）',
+            count: 1, mode: 'top', optional: true, zhimingTiming: timing,
+        },
+    })
+    return true
+}
+
+/** 星卜（谯周）不大于1：准备阶段弃置一张手牌 */
+function triggerXingbuPrepDiscard(state: GameState, general: GeneralInstance): boolean {
+    if ((general.prepDiscardPending ?? 0) <= 0) return false
+    general.prepDiscardPending = 0
+    addLog(state, `【${getGeneralName(general)}】的【星卜】生效：弃置一张手牌`)
+    if (general.hand.length === 0) return false
+    state.pendingResponseQueue.push({
+        type: ResponseType.SKILL_PICK_CARD,
+        targetGeneralIndex: state.generals.indexOf(general),
+        context: {
+            skillId: 'qiaozhou_xingbu_discard', skillName: '星卜',
+            description: '弃置一张手牌', count: 1, mode: 'discard',
+        },
+    })
+    return true
+}
+
 export function continueFromPrepPhase(state: GameState): void {
     // 队列中还有其他准备阶段技能待处理，不推进
     if (state.pendingResponseQueue.length > 0) return
@@ -1602,13 +1841,18 @@ export function continueFromPrepPhase(state: GameState): void {
     const general = getActiveGeneral(state)
     if (!general) return
 
+    // 星卜（谯周）：准备阶段弃置一张手牌
+    if (triggerXingbuPrepDiscard(state, general)) return
+    // 知命（谯周）：准备阶段摸一张，然后可置顶一张
+    if (triggerZhiming(state, general, 'prep')) return
+
     // 神速（夏侯渊）：准备阶段技能结束后，仍需询问神速
-    if (hasSkillById(general, 'xiahoyuan_shensu') && !general.skillsUsedThisTurn.includes('xiahoyuan_shensu')) {
+    if (hasSkillById(general, 'xiahouyuan_shensu') && !general.skillsUsedThisTurn.includes('xiahouyuan_shensu')) {
         state.pendingResponseQueue.push({
             type: ResponseType.SKILL_ACTIVATE_CONFIRM,
             targetGeneralIndex: state.generals.indexOf(general),
             context: {
-                skillId: 'xiahoyuan_shensu_1',
+                skillId: 'xiahouyuan_shensu_1',
                 skillName: '神速一',
                 description: '跳过判定和摸牌阶段，视为对一名角色使用一张杀',
             },
@@ -1728,9 +1972,13 @@ export function continueDelayedTrickJudge(
         // 检查是否有鬼才/缓释可介入
         const intervenor = findJudgeIntervenor(state, general)
         if (intervenor) {
+            const huanshiOwnerIndex = hasSkillById(intervenor, 'zhugejin_huanshi')
+                ? state.generals.indexOf(intervenor) : undefined
             state.pendingResponseQueue.unshift({
                 type: ResponseType.JUDGE_INTERVENE,
-                targetGeneralIndex: state.generals.indexOf(intervenor),
+                targetGeneralIndex: huanshiOwnerIndex !== undefined
+                    ? state.generals.indexOf(general)
+                    : state.generals.indexOf(intervenor),
                 context: {
                     judgingGeneralIndex: ctx.judgingGeneralIndex,
                     judgeCardId: judgeCard.id,
@@ -1741,6 +1989,7 @@ export function continueDelayedTrickJudge(
                     currentJudgeIndex: ctx.currentJudgeIndex,
                     skipAction,
                     skipDraw,
+                    huanshiOwnerIndex,
                 },
             })
             addLog(state, `【${getGeneralName(intervenor)}】可发动【${judgeInterveneSkillName(intervenor)}】修改判定`)
@@ -1857,8 +2106,8 @@ function hasBlackCard(g: GeneralInstance): boolean {
 
 /** 判定介入者实际发动的技能名（鬼才 / 缓释 / 鬼道） */
 export function judgeInterveneSkillName(g: GeneralInstance): '鬼才' | '缓释' | '鬼道' {
-    if (hasSkillById(g, 'simayi_guicai') || hasSkillById(g, 'simayi_jie_guicai')) return '鬼才'
-    if (hasSkillById(g, 'zhugejin_huanshi')) return '缓释'
+    if (hasSkillById(g, 'simayi_guicai') || hasSkillById(g, 'simayi_jie_guicai') || hasSkillById(g, 'simayi_jing_guicai')) return '鬼才'
+    if (hasSkillById(g, 'zhangjiao_guidao') || hasSkillById(g, 'zhangjiao_jie_guidao')) return '鬼道'
     return '鬼道'
 }
 
@@ -1879,11 +2128,12 @@ export function findJudgeIntervenor(state: GameState, judgingGeneral: GeneralIns
         if (excludeIndices.includes(idx)) continue
 
         // 鬼才：可以改任何人的判定
-        if (hasSkillById(g, 'simayi_guicai') || hasSkillById(g, 'simayi_jie_guicai')) return g
+        if (hasSkillById(g, 'simayi_guicai') || hasSkillById(g, 'simayi_jie_guicai') || hasSkillById(g, 'simayi_jing_guicai')) return g
         // 鬼道（张角）：可以改任何人的判定，但需有黑色牌（手牌或装备区）
-        if (hasSkillById(g, 'zhangjiao_guidao') && hasBlackCard(g)) return g
-        // 缓释：只能改己方角色的判定
-        if (hasSkillById(g, 'zhugejin_huanshi') && g.faction === judgingGeneral.faction) return g
+        if ((hasSkillById(g, 'zhangjiao_guidao') || hasSkillById(g, 'zhangjiao_jie_guidao')) && hasBlackCard(g)) return g
+        // 缓释：只能改己方角色的判定，且只能用手牌
+        if (hasSkillById(g, 'zhugejin_huanshi') && g.faction === judgingGeneral.faction
+            && g.hand.length > 0) return g
     }
     return null
 }
@@ -1931,6 +2181,7 @@ export function continueJudgePhase(
 
 /** 天妒（郭嘉）：判定牌生效后将该牌加入手牌 */
 function checkTiandu(state: GameState, general: GeneralInstance, judgeCard: Card): void {
+    checkZhuwei(state, general, judgeCard)
     const def = getGeneralById(general.generalId)
     if (def?.skills.some(s => s.id === 'guojia_tiandu')) {
         const idx = state.discard.indexOf(judgeCard)
@@ -2048,6 +2299,24 @@ export function handleEndTurn(
     }
     if (state.pendingResponseQueue.length > 0) return
 
+    // 节钺（谋于禁）：结束阶段，令一名其他角色获得1点护甲，然后其可以交给你一张牌
+    if (hasSkillById(general, 'yujin_mou_jieyue')
+        && !general.skillsUsedThisTurn.includes('yujin_mou_jieyue')
+        && state.generals.some((g) => g.alive && g !== general)) {
+        general.skillsUsedThisTurn.push('yujin_mou_jieyue')
+        state.pendingResponseQueue.unshift({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(general),
+            context: {
+                skillId: 'yujin_mou_jieyue',
+                skillName: '节钺',
+                description: '令一名其他角色获得1点护甲，然后其可以交给你一张牌',
+            },
+        })
+        addLog(state, `【${getGeneralName(general)}】可发动【节钺】`)
+    }
+    if (state.pendingResponseQueue.length > 0) return
+
     enterDiscardPhaseOrSkip(state, general)
 }
 
@@ -2055,11 +2324,135 @@ export function handleEndTurn(
  * 出牌阶段结束后的弃牌阶段入口：
  * 奋励（朱桓）可跳过弃牌阶段，手牌未超限则直接结束回合
  */
+/**
+ * 星卜（谯周）为2：跳过弃牌阶段。返回 true 表示已直接结束回合。
+ */
+function maybeSkipDiscardPhase(state: GameState, general: GeneralInstance): boolean {
+    if (!general.skipDiscardPhase) return false
+    general.skipDiscardPhase = false
+    addLog(state, `【${getGeneralName(general)}】的【星卜】生效，跳过弃牌阶段`)
+    finishTurn(state)
+    return true
+}
+
 export function enterDiscardPhaseOrSkip(state: GameState, general: GeneralInstance): void {
     if (state.pendingResponseQueue.length > 0) return
+    // 评荐（许劭）：出牌阶段结束，失去此时机获得的技能
+    expirePingjian(state, general, 'action')
+    // 引兵（祖茂）：出牌阶段结束时，可将任意张非基本牌置于武将牌上
+    if (hasSkillById(general, 'zumao_yinbing')
+        && !general.skillsUsedThisTurn.includes('zumao_yinbing_asked')) {
+        const nonBasic = [
+            ...general.hand.filter(c => c.category !== CardCategory.BASIC),
+            ...Object.values(general.equip)
+                .filter((c): c is Card => !!c && c.category !== CardCategory.BASIC),
+        ]
+        if (nonBasic.length > 0) {
+            general.skillsUsedThisTurn.push('zumao_yinbing_asked')
+            state.pendingResponseQueue.push({
+                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                targetGeneralIndex: state.generals.indexOf(general),
+                context: {
+                    skillId: 'zumao_yinbing',
+                    skillName: '引兵',
+                    description: `将任意张非基本牌置于武将牌上（现有${nonBasic.length}张可选）`,
+                    yinbingMax: nonBasic.length,
+                    candidateCardIds: nonBasic.map(c => c.id),
+                },
+            })
+            addLog(state, `【${getGeneralName(general)}】可发动【引兵】`)
+            return
+        }
+    }
+    // 贵相（族吴苋）：第 X 个阶段改为出牌阶段
+    if (maybeGuixiang(state, general, 'discard')) return
+    // 泥首（屈晃）：本阶段结束，执行待结算的手牌交换
+    resolveNishouSwaps(state)
+    // 逐日（谋姜维）：出牌阶段结束时手牌数变化则拼点
+    maybeZhuri(state, general)
+    // 叛侵（SP孟获）：出牌阶段结束时，可将本阶段弃置的牌当【南蛮入侵】使用
+    if (general.panqinOwned && (general.panqinDiscardIds?.length ?? 0) > 0
+        && general.panqinPhaseKey === 'action' && general.panqinAskedPhase !== 'action') {
+        general.panqinAskedPhase = 'action'
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(general),
+            context: {
+                skillId: 'menghuo_sp_panqin', skillName: '叛侵',
+                description: `将本阶段弃置的${general.panqinDiscardIds!.length}张牌当【南蛮入侵】使用？`,
+                panqinOwnerIndex: state.generals.indexOf(general),
+                panqinCount: general.panqinDiscardIds!.length,
+                panqinResume: 'action',
+            },
+        })
+        addLog(state, `【${getGeneralName(general)}】可发动【叛侵】`)
+        return
+    }
+    // 素俭（邓芝）：弃牌阶段改为分配/弃置本回合未获得的牌
+    if (hasSkillById(general, 'dengzhi_sujian')) {
+        const sjGained = new Set(general.gainedCardIdsThisTurn ?? [])
+        const sjEligible = general.hand.filter(c => !sjGained.has(c.id))
+        if (sjEligible.length > 0) {
+            state.pendingResponseQueue.push({
+                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                targetGeneralIndex: state.generals.indexOf(general),
+                context: {
+                    skillId: 'dengzhi_sujian', skillName: '素俭',
+                    description: '选择本回合未获得的牌：分配给其他角色，或弃置并令一名其他角色弃等量牌',
+                    options: [
+                        { action: 'sujian_give', label: '分配给其他角色' },
+                        { action: 'sujian_discard', label: '弃置并令一名其他角色弃等量牌' },
+                    ],
+                    sujianEligibleIds: sjEligible.map(c => c.id),
+                },
+            })
+            addLog(state, `【${getGeneralName(general)}】可发动【素俭】`)
+            return
+        }
+    }
+    // 清忠（鲁芝）：本阶段结束时，与手牌数最少的角色交换手牌
+    if ((general as any).qingzhongActive) {
+        ;(general as any).qingzhongActive = false
+        const qzOthers = state.generals.filter(g => g.alive && g !== general)
+        if (qzOthers.length > 0) {
+            const qzTarget = [...qzOthers].sort((a, b) => a.hand.length - b.hand.length)[0]
+            const qzMine = general.hand.splice(0)
+            const qzTheirs = qzTarget.hand.splice(0)
+            general.hand.push(...qzTheirs)
+            qzTarget.hand.push(...qzMine)
+            addLog(state, `【${getGeneralName(general)}】发动【清忠】，与【${getGeneralName(qzTarget)}】交换手牌`)
+        }
+    }
+    // 缔盟（界鲁肃）：此阶段结束时弃置 X 张牌（X 为两名角色交换前的牌数差）
+    if (hasSkillById(general, 'lusu_jie_dimeng') && (general.dimengDebt ?? 0) > 0) {
+        let debt = general.dimengDebt ?? 0
+        general.dimengDebt = 0
+        const dropped: Card[] = []
+        for (const c of [...general.hand].sort((a, b) => a.value - b.value)) {
+            if (debt <= 0) break
+            const idx = general.hand.indexOf(c)
+            if (idx < 0) continue
+            general.hand.splice(idx, 1)
+            state.discard.push(c)
+            dropped.push(c)
+            debt--
+        }
+        if (dropped.length > 0) {
+            addLog(state, `【${getGeneralName(general)}】【缔盟】弃置${dropped.length}张牌`)
+            markCardStateBaseline(state, general)
+        }
+    }
     // 观微（潘濬）：出牌阶段结束时，本回合使用过至少两张同花色的牌
     triggerGuanwei(state, general)
     if (state.pendingResponseQueue.length > 0) return
+    // 克己（界吕蒙）：本回合未使用或打出过【杀】时，跳过弃牌阶段
+    if (hasSkillById(general, 'lvmeng_jie_keji')
+        && state.attackUsedThisTurn === 0
+        && !(general.basicUsedThisTurn ?? []).includes('attack')) {
+        addLog(state, `【${getGeneralName(general)}】发动【克己】，跳过弃牌阶段`)
+        finishTurn(state)
+        return
+    }
     // 巧变（张郃）：弃牌阶段入口询问是否弃一张手牌跳过弃牌阶段
     if (maybeQiaobian(state, general, 'discard')) return
     // 奋励（朱桓）：装备区里有牌且数量为全场最多，可跳过弃牌阶段
@@ -2079,6 +2472,7 @@ export function enterDiscardPhaseOrSkip(state: GameState, general: GeneralInstan
         addLog(state, `【${getGeneralName(general)}】可发动【奋励】跳过弃牌阶段`)
         return
     }
+    if (maybeSkipDiscardPhase(state, general)) return
     enterDiscardPhase(state, general)
     if (general.hand.length <= getHandLimit(general)) {
         finishTurn(state)
@@ -2090,6 +2484,7 @@ export function continueAfterYanyu(state: GameState): void {
     const general = getActiveGeneral(state)
     if (!general) return
     if (state.pendingResponseQueue.length > 0) return
+    if (maybeSkipDiscardPhase(state, general)) return
     enterDiscardPhase(state, general)
     if (general.hand.length <= getHandLimit(general)) finishTurn(state)
 }
@@ -2098,6 +2493,7 @@ export function continueAfterYanyu(state: GameState): void {
 export function proceedAfterShuomeng(state: GameState): void {
     const general = getActiveGeneral(state)
     if (!general) return
+    if (maybeSkipDiscardPhase(state, general)) return
     enterDiscardPhase(state, general)
     if (general.hand.length <= getHandLimit(general)) finishTurn(state)
 }
@@ -2149,6 +2545,15 @@ export function handleDiscard(
     markCardStateBaseline(state, general)
     maybeChunlaoPickup(state, general, discarded)
     general.discardedHandThisPhase = (general.discardedHandThisPhase ?? 0) + discarded.length
+    // 叛侵（SP孟获）：记录本阶段弃置的牌
+    if (general.panqinOwned) {
+        if (general.panqinPhaseKey !== 'discard') {
+            general.panqinPhaseKey = 'discard'
+            general.panqinDiscardIds = []
+            general.panqinAskedPhase = undefined
+        }
+        general.panqinDiscardIds = [...(general.panqinDiscardIds ?? []), ...discarded.map(c => c.id)]
+    }
 
     const cardNames = discarded.map(c => cardFullName(c)).join('、')
     addLog(state, `【${getGeneralName(general)}】弃置了 ${discarded.length} 张牌：${cardNames}`)
@@ -2243,13 +2648,64 @@ export function handleDiscard(
     }
     // 旋风等技能的询问尚未结算时，先等玩家响应
     if (state.pendingResponseQueue.length > 0) return
+    // 叛侵（SP孟获）：弃牌阶段结束时，可将本阶段弃置的牌当【南蛮入侵】使用
+    if (general.panqinOwned && (general.panqinDiscardIds?.length ?? 0) > 0
+        && general.panqinPhaseKey === 'discard' && general.panqinAskedPhase !== 'discard') {
+        general.panqinAskedPhase = 'discard'
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(general),
+            context: {
+                skillId: 'menghuo_sp_panqin', skillName: '叛侵',
+                description: `将本阶段弃置的${general.panqinDiscardIds!.length}张牌当【南蛮入侵】使用？`,
+                panqinOwnerIndex: state.generals.indexOf(general),
+                panqinCount: general.panqinDiscardIds!.length,
+                panqinResume: 'discard',
+            },
+        })
+        addLog(state, `【${getGeneralName(general)}】可发动【叛侵】`)
+        return
+    }
     finishTurn(state)
+}
+
+/**
+ * 贵相（族吴苋）：本回合第 X 个阶段开始前，将此阶段改为出牌阶段（X 为手牌上限）。
+ * 返回 true 表示该阶段已被替换，调用方应直接返回。
+ */
+let guixiangBusy = false
+function maybeGuixiang(state: GameState, general: GeneralInstance, phaseKey: string): boolean {
+    if (!general.alive || !hasSkillById(general, 'wuxian_zu_guixiang')) return false
+    // 由改写而进入的出牌阶段不再重复计数
+    if (guixiangBusy) return false
+    if (general.guixiangTurn !== state.turnSerial) {
+        general.guixiangTurn = state.turnSerial
+        general.guixiangPhases = 0
+    }
+    const ordinal = (general.guixiangPhases ?? 0) + 1
+    general.guixiangPhases = ordinal
+    if (phaseKey === 'action') return false
+    const limit = getHandLimit(general)
+    if (limit <= 0 || ordinal !== limit) return false
+    addLog(state, `【${getGeneralName(general)}】【贵相】本回合第${ordinal}个阶段改为出牌阶段`)
+    guixiangBusy = true
+    try {
+        beginActionPhase(state, general)
+    } finally {
+        guixiangBusy = false
+    }
+    return true
 }
 
 /**
  * 结束阶段技能结算（在回合结束前统一处理）。
  * 说明：部分技能按“玩家会同意的最优选择”自动结算，以免打断单机节奏。
  */
+/** 泥首（屈晃）：阶段结束时统一结算待交换的手牌 */
+function resolveNishouSwaps(state: GameState): void {
+    for (const g of state.generals) resolveNishouPendingSwap(state, g)
+}
+
 function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
     const name = getGeneralName(general)
     const aliveOthers = state.generals.filter(g => g.alive && g !== general)
@@ -2266,6 +2722,53 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
     }
     const lowestCards = (g: GeneralInstance, count: number): Card[] =>
         [...g.hand].sort((a, b) => handValue(a) - handValue(b)).slice(0, count)
+
+    // 星卜（谯周）：结束阶段亮出牌堆顶三张牌，选择一名其他角色按红牌数获得效果
+    if (hasSkillById(general, 'qiaozhou_xingbu')) {
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(general),
+            context: {
+                skillId: 'qiaozhou_xingbu', skillName: '星卜',
+                description: '亮出牌堆顶的三张牌，然后可选择一名其他角色，令其根据红色牌数获得对应效果',
+                endPhaseSkill: true,
+            },
+        })
+        addLog(state, `【${name}】可发动【星卜】`)
+    }
+
+    // 辟田（郑浑）：结束阶段摸至手牌上限（至多五张），然后失去因此获得的上限加值
+    triggerPitian(state, general)
+
+    // 生息（蒋琬-竞）：一名角色回合结束时，若其已受伤，可弃置其X张牌，然后其回复1点体力
+    for (const jw of state.generals) {
+        if (!jw.alive || !hasSkillById(jw, 'jiangwan_jing_shengxi')) continue
+        if (general.hp >= general.maxHp) continue
+        const lost = general.maxHp - general.hp
+        const pool = [
+            ...general.hand.map(c => c.id),
+            ...Object.values(general.equip).filter((c): c is Card => !!c).map(c => c.id),
+        ]
+        if (pool.length < lost) continue
+        const jwIdx = state.generals.indexOf(jw)
+        if (state.pendingResponseQueue.some(p => (p.context as any)?.skillId === 'jiangwan_jing_shengxi'
+            && p.targetGeneralIndex === jwIdx)) continue
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: jwIdx,
+            context: {
+                skillId: 'jiangwan_jing_shengxi', skillName: '生息',
+                description: `【${name}】已受伤，可弃置其${lost}张牌，然后其回复1点体力`,
+                options: [
+                    { action: 'confirm', label: '发动' },
+                    { action: 'decline', label: '不发动' },
+                ],
+                shengxiTargetIndex: state.generals.indexOf(general),
+                shengxiCount: lost,
+            },
+        })
+        addLog(state, `【${getGeneralName(jw)}】可发动【生息】`)
+    }
 
     // 诫训（薛综）：令一名其他角色摸场上♦牌数张，再弃此前发动次数张
     if (hasSkillById(general, 'xuezong_jiexun')) {
@@ -2387,6 +2890,51 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
                 endPhaseSkill: true, aiConfirm: true,
             },
         })
+    }
+    // 评荐（许劭）：结束阶段可再次发动
+    if (hasSkillById(general, 'xushao_pingjian')) {
+        maybePingjian(state, general, 'end')
+    }
+    // 困奋（谋姜维）：结束阶段，可失去1点体力摸两张牌
+    if (hasSkillById(general, 'jiangwei_mou_kunfen') && general.alive
+        && general.hp > 0 && general.kunfenTurn !== state.turnSerial) {
+        general.kunfenTurn = state.turnSerial
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(general),
+            context: {
+                skillId: 'jiangwei_mou_kunfen', skillName: '困奋',
+                description: '失去1点体力，摸两张牌',
+                options: [
+                    { action: 'loseHp', label: '失去1点体力，摸两张牌' },
+                    { action: 'decline', label: '不发动' },
+                ],
+                endPhaseSkill: true,
+            },
+        })
+        addLog(state, `【${name}】可发动【困奋】`)
+    }
+    // 燃己（谋姜维）：结束阶段，按本回合使用过牌的阶段数获得【困奋】或【诈降】
+    if (hasSkillById(general, 'jiangwei_mou_ranji') && general.alive
+        && !general.usedLimitedSkills.includes('jiangwei_mou_ranji')) {
+        const phaseCount = new Set(general.usedCardPhases ?? []).size
+        const ranjiOptions = [
+            ...(phaseCount >= general.hp ? [{ action: 'kunfen', label: '获得【困奋】' }] : []),
+            ...(phaseCount <= general.hp ? [{ action: 'zhaoxiang', label: '获得【诈降】' }] : []),
+        ]
+        if (ranjiOptions.length > 0) {
+            state.pendingResponseQueue.push({
+                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                targetGeneralIndex: state.generals.indexOf(general),
+                context: {
+                    skillId: 'jiangwei_mou_ranji', skillName: '燃己',
+                    description: `本回合于${phaseCount}个阶段使用过牌（体力值${general.hp}），获得一个技能`,
+                    options: ranjiOptions,
+                    endPhaseSkill: true,
+                },
+            })
+            addLog(state, `【${name}】可发动【燃己】`)
+        }
     }
     // 双雄②（界颜良文丑）：获得本回合对你造成伤害的牌
     if (hasSkillById(general, 'yanliang_shuangxiong') && (general.damagedCardIds ?? []).length > 0) {
@@ -2542,6 +3090,27 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
         addLog(state, `【${getGeneralName(xs)}】可发动【樵拾】`)
     }
 
+    // 俭衣（蒋钦）：其他角色的回合结束时，若弃牌堆中有本回合因弃置置入的防具牌，选择一张获得之
+    for (const jq of state.generals) {
+        if (!jq.alive || jq === general) continue
+        if (!hasSkillById(jq, 'jiangqin_jianyi')) continue
+        const jianyiCards = state.discard.filter(c => c.discardTurn === state.turnSerial
+            && c.category === CardCategory.EQUIPMENT && c.equipSlot === EquipSlot.ARMOR)
+        if (jianyiCards.length === 0) continue
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(jq),
+            context: {
+                skillId: 'jiangqin_jianyi',
+                skillName: '俭衣',
+                description: '选择一张本回合因弃置置入弃牌堆的防具牌获得之',
+                jianyiCardIds: jianyiCards.map(c => c.id),
+                options: jianyiCards.map(c => ({ action: `take:${c.id}`, label: `获得${cardFullName(c)}` })),
+            },
+        })
+        addLog(state, `【${getGeneralName(jq)}】发动【俭衣】`)
+    }
+
     // 秘计（王异）：已受伤时可摸X张，然后将等量手牌交给其他角色
     if (hasSkillById(general, 'wangyi_miji') && general.hp < general.maxHp) {
         const x = general.maxHp - general.hp
@@ -2594,21 +3163,26 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
         })
     }
 
-    // 秉壹（顾雍）：展示手牌，颜色均相同则令至多手牌数名角色各摸一张
-    if (hasSkillById(general, 'guyong_bingyi') && general.hand.length > 0) {
+    // 秉壹（顾雍/界顾雍）：展示手牌，颜色均相同（界版颜色或类型相同）则令至多手牌数名角色各摸一张
+    const guyongBingyiId = hasSkillById(general, 'guyong_jie_bingyi') ? 'guyong_jie_bingyi'
+        : hasSkillById(general, 'guyong_bingyi') ? 'guyong_bingyi' : undefined
+    if (guyongBingyiId && general.hand.length > 0) {
+        const isJieGuyong = guyongBingyiId === 'guyong_jie_bingyi'
         const suits = general.hand.map(c => c.suit)
         const allRed = suits.every(s => s === CardSuit.HEART || s === CardSuit.DIAMOND)
         const allBlack = suits.every(s => s === CardSuit.SPADE || s === CardSuit.CLUB)
-        const bingyiSameCat = general.hand.every((c) => c.category === general.hand[0].category)
+        const bingyiSameCat = isJieGuyong
+            && general.hand.every((c) => c.category === general.hand[0].category)
+        const bingyiLabel = isJieGuyong ? '手牌颜色或类型相同' : '手牌颜色相同'
         if (allRed || allBlack || bingyiSameCat) {
             const candidates = state.generals.map((g, i) => ({ g, i })).filter(({ g }) => g.alive).map(({ i }) => i)
             state.pendingResponseQueue.unshift({
                 type: ResponseType.SKILL_CHOOSE_TARGET,
                 targetGeneralIndex: state.generals.indexOf(general),
                 context: {
-                    skillId: 'guyong_bingyi',
+                    skillId: guyongBingyiId,
                     skillName: '秉壹',
-                    description: `手牌颜色或类型相同，选择至多 ${general.hand.length} 名角色各摸一张牌`,
+                    description: `${bingyiLabel}，选择至多 ${general.hand.length} 名角色各摸一张牌`,
                     candidateIndices: candidates,
                     multi: true,
                     maxPicks: general.hand.length,
@@ -2618,25 +3192,26 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
         }
     }
 
-    // 直言（界虞翻）：结束阶段，或上家的结束阶段，令一名角色摸一张牌并展示
+    // 直言（界虞翻）：结束阶段，或你距离1以内的其他角色的结束阶段，令一名角色摸一张牌并展示
     for (const [zyIdx, zyOwner] of state.generals.entries()) {
-        if (!zyOwner.alive || !hasSkillById(zyOwner, 'yufan_zhiyan')) continue
+        const yufanZhiyanId = hasSkillById(zyOwner, 'yufan_jie_zhiyan') ? 'yufan_jie_zhiyan'
+            : hasSkillById(zyOwner, 'yufan_zhiyan') ? 'yufan_zhiyan' : undefined
+        if (!zyOwner.alive || !yufanZhiyanId) continue
         if (state.deck.length === 0) break
-        let zyTriggers = zyOwner === general
-        if (!zyTriggers) {
-            const aliveSeats = state.generals.map((g, i) => ({ g, i })).filter(({ g }) => g.alive)
-            const pos = aliveSeats.findIndex(({ i }) => i === zyIdx)
-            const prevSeat = aliveSeats[(pos - 1 + aliveSeats.length) % aliveSeats.length]
-            zyTriggers = state.generals[prevSeat.i] === general
-        }
+        const isJieYufan = yufanZhiyanId === 'yufan_jie_zhiyan'
+        const zyTriggers = zyOwner === general
+            || (isJieYufan
+                && getAttackRange(zyOwner, general, state.generals).distance <= 1)
         if (!zyTriggers) continue
         state.pendingResponseQueue.unshift({
             type: ResponseType.SKILL_CHOOSE_TARGET,
             targetGeneralIndex: zyIdx,
             context: {
-                skillId: 'yufan_zhiyan',
+                skillId: yufanZhiyanId,
                 skillName: '直言',
-                description: '选择一名角色摸一张牌并展示，若为装备牌则其使用并回复1点体力，否则若其体力值不等于你，其失去1点体力',
+                description: isJieYufan
+                    ? '选择一名角色摸一张牌并展示，若为装备牌则其使用并回复1点体力，否则若其体力值不等于你，其失去1点体力'
+                    : '选择一名角色摸一张牌并展示，若为装备牌则其使用并回复1点体力',
                 candidateIndices: state.generals
                     .map((g, idx) => ({ g, idx }))
                     .filter(({ g }) => g.alive)
@@ -2646,42 +3221,7 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
         addLog(state, '【' + getGeneralName(zyOwner) + '】可发动【直言】')
     }
 
-    // 引兵（祖茂）：将至多2张非基本牌置于武将牌上
-    if (hasSkillById(general, 'zumao_yinbing')) {
-        const nonBasic = general.hand.filter(c => c.category !== CardCategory.BASIC)
-        if (nonBasic.length > 0) {
-            state.pendingResponseQueue.unshift({
-                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
-                targetGeneralIndex: state.generals.indexOf(general),
-                context: {
-                    skillId: 'zumao_yinbing',
-                    skillName: '引兵',
-                    description: '将任意张非基本牌置于武将牌上（至多2张）',
-                    yinbingMax: Math.min(2, nonBasic.length),
-                },
-            })
-            addLog(state, `【${name}】可发动【引兵】`)
-        }
-    }
-
-    // 郡兵（司马朗）：一名角色的结束阶段，若其手牌数小于2，其可以摸一张牌并交给司马朗所有手牌，
-    // 然后司马朗交给其等量的牌（由司马朗挑选归还哪几张）
-    for (const simalang of state.generals) {
-        if (!simalang.alive || simalang === general) continue
-        if (!hasSkillById(simalang, 'simalang_junbing')) continue
-        if (general.hand.length >= 2) continue
-        state.pendingResponseQueue.push({
-            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
-            targetGeneralIndex: state.generals.indexOf(general),
-            context: {
-                skillId: 'simalang_junbing',
-                skillName: '郡兵',
-                description: `摸一张牌并将所有手牌交给【${getGeneralName(simalang)}】，然后其交给你等量的牌`,
-                junbingOwnerIndex: state.generals.indexOf(simalang),
-            },
-        })
-        addLog(state, `【${getGeneralName(simalang)}】可发动【郡兵】（【${name}】手牌不足2张）`)
-    }
+    // 郡兵已随司马朗一并移除
 
     // 窃听（蔡夫人）：其他角色本回合未对其余角色使用过牌时，取其装备或摸一张
     if ((general.cardsUsedOnOthersThisTurn ?? 0) === 0) {
@@ -2739,7 +3279,8 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
     // 骁果（乐进）：弃一张基本牌，令敌方结束角色弃装备牌（乐进摸一张）或受到1点伤害
     for (const yuejin of state.generals) {
         if (!yuejin.alive || yuejin === general) continue
-        if (!hasSkillById(yuejin, 'yuejin_xiaoguo')) continue
+        if (!hasSkillById(yuejin, 'yuejin_xiaoguo')
+            && !hasSkillById(yuejin, 'zhanghulelin_xiaoguo')) continue
         if (yuejin.faction === general.faction) continue
         const basics = yuejin.hand.filter(c => c.category === CardCategory.BASIC)
         if (basics.length === 0) continue
@@ -2875,7 +3416,44 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
     triggerShefu(state, general)
     triggerQiluan(state, general)
     triggerShuliang(state, general)
+    triggerGoude(state, general)
+    triggerDaili(state, general)
 
+    // 自书（马良）①：其他角色的结束阶段结束时，将其本回合获得的牌置入弃牌堆
+    for (const zsOwner of state.generals) {
+        if (!zsOwner.alive || zsOwner === general || !hasSkillById(zsOwner, 'maliang_zishu')) continue
+        const zsGained = new Set(general.gainedCardIdsThisTurn ?? [])
+        let zsMoved = 0
+        for (const c of [...general.hand]) {
+            if (!zsGained.has(c.id)) continue
+            general.hand.splice(general.hand.indexOf(c), 1)
+            state.discard.push(c)
+            zsMoved++
+        }
+        if (zsMoved > 0) {
+            addLog(state, `【${getGeneralName(zsOwner)}】发动【自书】，将【${getGeneralName(general)}】本回合获得的${zsMoved}张牌置入弃牌堆`)
+        }
+    }
+    // 掠城（张曼成）：回合结束时目标展示手牌并可对其依次使用【杀】
+    if (general.luechengTurn !== undefined && general.luechengTurn === state.turnSerial
+        && general.luechengTarget !== undefined) {
+        const lcTarget = state.generals[general.luechengTarget]
+        if (lcTarget?.alive && lcTarget !== general) {
+            addLog(state, `【${getGeneralName(general)}】的【掠城】：【${getGeneralName(lcTarget)}】展示所有手牌`)
+            if (lcTarget.hand.some(c => isSlashLikeCard(c))) {
+                state.pendingResponseQueue.push({
+                    type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                    targetGeneralIndex: general.luechengTarget,
+                    context: {
+                        skillId: 'zhangmancheng_luecheng_end', skillName: '掠城',
+                        description: '展示手牌中的【杀】，是否对你依次使用这些【杀】？',
+                        luechengSourceIndex: state.generals.indexOf(general),
+                    },
+                })
+                addLog(state, `【${getGeneralName(lcTarget)}】可对【${getGeneralName(general)}】依次使用手牌中的【杀】`)
+            }
+        }
+    }
     // 励战（曹仁）：结束阶段结束时，令任意名已受伤的角色各摸一张牌
     triggerLizhan(state, general)
     // 宽释（阚泽）：结束阶段，选择一名角色获得伤害防止
@@ -2911,6 +3489,15 @@ export function resolveXiaoguo(state: GameState, yuejin: GeneralInstance, target
 
 export function finishTurn(state: GameState): void {
     const general = getActiveGeneral(state)
+    // 知命（谯周）：弃牌阶段结束时摸一张，然后可置顶一张
+    if (general && state.turnPhase === TurnPhase.DISCARD
+        && triggerZhiming(state, general, 'discard')) return
+    // 逐日（谋姜维）：弃牌阶段结束时手牌数变化则拼点
+    if (general) maybeZhuri(state, general)
+    // 贵相（族吴苋）：结束阶段同样可被改写为出牌阶段
+    if (general && state.pendingResponseQueue.length === 0 && maybeGuixiang(state, general, 'end')) return
+    // 穿屋（张华）：回合结束时恢复本回合失去的技能
+    restoreChuanwu(state)
     // 观微（潘濬）：于此阶段结束后执行一个额外的出牌阶段
     if (general?.alive && general.extraActionPhase) {
         general.extraActionPhase = false
@@ -2928,6 +3515,31 @@ export function finishTurn(state: GameState): void {
                 g.qianxunPileTurn = undefined
                 triggerLiangyinIn(state)
             }
+        }
+
+        // 镇卫（文聘）：回合结束时，将因镇卫无效的牌归还给其使用者
+        for (const g of state.generals) {
+            if ((g.zhenweiRegain?.length ?? 0) === 0) continue
+            g.hand.push(...g.zhenweiRegain!)
+            addLog(state, `【${getGeneralName(g)}】取回因【镇卫】无效的 ${g.zhenweiRegain!.length} 张牌`)
+            g.zhenweiRegain = []
+        }
+
+        // 斩腕（曹性）：因流矢减少手牌上限的角色，弃牌阶段结束时若其弃置过牌，
+        // 曹性摸等量牌，然后恢复其因流矢减少的手牌上限
+        if ((general.liushiPenalty ?? 0) > 0 && (general.discardedHandThisPhase ?? 0) > 0) {
+            const zwDiscard = general.discardedHandThisPhase ?? 0
+            const zwOwner = state.generals.find(
+                (g) => g.alive && hasSkillById(g, 'caoxing_zhanwan'))
+            if (zwOwner) {
+                const zwDrawn = drawCards(state, zwDiscard)
+                zwOwner.hand.push(...zwDrawn)
+                addLog(state, `【${getGeneralName(zwOwner)}】发动【斩腕】，摸${zwDrawn.length}张牌`)
+            }
+            const zwRestore = general.liushiPenalty ?? 0
+            general.handLimitPenalty = Math.max(0, (general.handLimitPenalty ?? 0) - zwRestore)
+            general.liushiPenalty = 0
+            addLog(state, `【${getGeneralName(general)}】因【斩腕】恢复${zwRestore}点手牌上限`)
         }
 
         runEndPhaseSkills(state, general)
@@ -2970,7 +3582,9 @@ export function finishTurn(state: GameState): void {
         if (general.guanxingEndAgain) {
             general.guanxingEndAgain = false
             const gxAlive = state.generals.filter(g => g.alive).length
-            const gxBase = general.generalId === 'zhugeliang_jie' ? (gxAlive < 4 ? 3 : 5) : Math.min(gxAlive, 5)
+            const gxBase = general.generalId === 'zhugeliang_jie' || general.generalId === 'jiangwei_jie'
+                ? (gxAlive < 4 ? 3 : 5)
+                : Math.min(gxAlive, 5)
             const gxCount = Math.min(gxBase, state.deck.length)
             if (gxCount > 0) {
                 const gxCards = state.deck.splice(0, gxCount)
@@ -2983,6 +3597,110 @@ export function finishTurn(state: GameState): void {
                     },
                 })
                 addLog(state, `【${getGeneralName(general)}】【观星】结束阶段再次观星${gxCount}张牌`)
+            }
+        }
+
+        // 劫营②③（神甘宁）：结束阶段交出“营”；持有“营”的其他角色回合结束时，神甘宁获得其所有手牌
+        const yingOwner = state.generals.find((g) => g.yingMark)
+        if (yingOwner) {
+            if (yingOwner === general && hasSkillById(general, 'ganning_shen_jieying')) {
+                const yingTarget = state.generals
+                    .filter((g) => g.alive && g !== general)
+                    .sort((a, b) => (a.faction === general.faction ? 1 : 0) - (b.faction === general.faction ? 1 : 0)
+                        || b.hand.length - a.hand.length)[0]
+                if (yingTarget) {
+                    // ②是“可以将营交给一名其他角色”，由持有者选择目标或放弃
+                    const yingCandidates = state.generals
+                        .map((g, idx) => ({ g, idx }))
+                        .filter(({ g }) => g.alive && g !== general)
+                        .map(({ idx }) => idx)
+                    if (yingCandidates.length > 0) {
+                        state.pendingResponseQueue.push({
+                            type: ResponseType.SKILL_CHOOSE_TARGET,
+                            targetGeneralIndex: state.generals.indexOf(general),
+                            context: {
+                                skillId: 'ganning_shen_jieying_give',
+                                skillName: '劫营',
+                                description: '将“营”交给一名其他角色？',
+                                candidateIndices: yingCandidates,
+                            },
+                        })
+                        addLog(state, `【${getGeneralName(general)}】可发动【劫营】将“营”交给一名其他角色`)
+                    }
+                }
+            } else if (yingOwner === general) {
+                const jieyingOwner = state.generals.find(
+                    (g) => g.alive && hasSkillById(g, 'ganning_shen_jieying'))
+                yingOwner.yingMark = false
+                if (jieyingOwner && yingOwner.hand.length > 0) {
+                    const stolen = yingOwner.hand.splice(0)
+                    jieyingOwner.hand.push(...stolen)
+                    addLog(state, `【${getGeneralName(jieyingOwner)}】【劫营】移去“营”，获得【${getGeneralName(yingOwner)}】的${stolen.length}张手牌`)
+                }
+            }
+        }
+
+        // 勤学（界吕蒙·觉醒技）：结束阶段，手牌数减体力值至少为2 → 减1点体力上限，摸两张并获得【攻心】
+        if (hasSkillById(general, 'lvmeng_jie_qinxue') && !general.awakened
+            && general.hand.length - general.hp >= 2) {
+            general.awakened = true
+            general.maxHp = Math.max(1, general.maxHp - 1)
+            if (general.hp > general.maxHp) general.hp = general.maxHp
+            state.pendingResponseQueue.push({
+                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                targetGeneralIndex: state.generals.indexOf(general),
+                context: {
+                    skillId: 'lvmeng_jie_qinxue',
+                    skillName: '勤学',
+                    description: '觉醒：减1点体力上限，摸两张牌并获得【攻心】',
+                    autoExecute: true,
+                },
+            })
+            addLog(state, `【${getGeneralName(general)}】【勤学】觉醒！减1点体力上限`)
+        }
+
+        // 诛害（界徐庶）：其他角色的结束阶段，若其本回合造成过伤害，可对其使用一张【杀】
+        if ((general.damageDealtThisTurn ?? 0) > 0) {
+            for (const xs of state.generals) {
+                if (!xs.alive || xs === general) continue
+                if (!hasSkillById(xs, 'xushu_zhuhai')) continue
+                if (!getAttackRange(xs, general, state.generals).inRange) continue
+                state.pendingResponseQueue.unshift({
+                    type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                    targetGeneralIndex: state.generals.indexOf(xs),
+                    context: {
+                        skillId: 'xushu_zhuhai',
+                        skillName: '诛害',
+                        description: `对【${getGeneralName(general)}】使用一张【杀】（其本回合造成过伤害）`,
+                        zhuhaiTargetIndex: state.generals.indexOf(general),
+                    },
+                })
+                addLog(state, `【${getGeneralName(xs)}】可发动【诛害】`)
+            }
+        }
+
+        // 承诏（董承）：结束阶段，若本回合获得过至少两张手牌，可与一名角色拼点
+        if (hasSkillById(general, 'dongcheng_chengzhao')
+            && (general.gainedCardsThisTurn ?? 0) >= 2
+            && !general.skillsUsedThisTurn.includes('dongcheng_chengzhao')
+            && general.hand.length > 0) {
+            const ccTarget = state.generals
+                .map((g, i) => ({ g, i }))
+                .filter(({ g }) => g.alive && g !== general && g.hand.length > 0)
+                .sort((a, b) => a.g.hand.length - b.g.hand.length)[0]
+            if (ccTarget) {
+                general.skillsUsedThisTurn.push('dongcheng_chengzhao')
+                state.pendingResponseQueue.unshift({
+                    type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                    targetGeneralIndex: state.generals.indexOf(general),
+                    context: {
+                        skillId: 'dongcheng_chengzhao',
+                        skillName: '承诏',
+                        description: `与【${getGeneralName(ccTarget.g)}】拼点：若你赢，视为对其使用一张无视防具的【杀】`,
+                        chengzhaoTargetIndex: ccTarget.i,
+                    },
+                })
+                addLog(state, `【${getGeneralName(general)}】可发动【承诏】`)
             }
         }
 
@@ -3037,6 +3755,35 @@ export function finishTurn(state: GameState): void {
         // 明鉴（曹叡）：其下个回合的手牌上限与【杀】次数上限加成在本回合结束时失效
         general.mingjianBonus = false
         addLog(state, `【${getGeneralName(general)}】回合结束`)
+
+        // 博图（界吕蒙）：本回合置入弃牌堆的牌包含四种花色时，可执行一个额外回合
+        if (hasSkillById(general, 'lvmeng_jie_botu')
+            && !general.skillsUsedThisTurn.includes('lvmeng_jie_botu')) {
+            const botuRound = state.roundState?.roundNumber ?? 0
+            const botuUsed = general.botuRound === botuRound ? (general.botuUses ?? 0) : 0
+            const botuLimit = Math.min(3, state.generals.filter((g) => g.alive).length)
+            const botuBase = new Set(general.discardBaseline ?? [])
+            const botuSuits = new Set(
+                state.discard.filter((c) => !botuBase.has(c.id)).map((c) => c.suit))
+            const botuReady = botuUsed < botuLimit
+                && botuSuits.has(CardSuit.SPADE) && botuSuits.has(CardSuit.HEART)
+                && botuSuits.has(CardSuit.CLUB) && botuSuits.has(CardSuit.DIAMOND)
+            if (botuReady) {
+                general.skillsUsedThisTurn.push('lvmeng_jie_botu')
+                general.botuRound = botuRound
+                general.botuUses = botuUsed + 1
+                state.pendingResponseQueue.push({
+                    type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                    targetGeneralIndex: state.generals.indexOf(general),
+                    context: {
+                        skillId: 'lvmeng_jie_botu',
+                        skillName: '博图',
+                        description: '本回合置入弃牌堆的牌包含四种花色，可执行一个额外回合',
+                    },
+                })
+                addLog(state, `【${getGeneralName(general)}】可发动【博图】`)
+            }
+        }
 
         // 智盟（神鲁肃）：回合结束后，可随机平分自己与一名手牌数受限的其他角色的所有手牌
         triggerZhimeng(state, general)
@@ -3113,10 +3860,17 @@ function advancePairTurn(state: GameState): void {
  */
 export function resumeStalledTurn(state: GameState): boolean {
     if (state.phase !== 'playing') return false
-    if (state.turnPhase !== TurnPhase.TURN_END) return false
     if (state.pendingResponseQueue.length > 0) return false
     if (state.negateWindow) return false
-    if (!getActiveGeneral(state)) return false
+    const general = getActiveGeneral(state)
+    if (!general) return false
+    // 摸牌阶段被技能的出牌/伤害结算打断后没有回到回合流程（如眩惑令他人出杀）：
+    // 队列为空说明没有待结算项，直接进入出牌阶段，避免回合永久停在 DRAW
+    if (state.turnPhase === TurnPhase.DRAW) {
+        beginActionPhase(state, general)
+        return true
+    }
+    if (state.turnPhase !== TurnPhase.TURN_END) return false
     advanceAfterTurn(state)
     return true
 }
@@ -3126,13 +3880,21 @@ export function advanceAfterTurn(state: GameState): void {
     // 回合切换前按“当前回合角色”补一次失去牌检测：弃牌阶段的弃牌就发生在这之前，
     // 等下一回合的界面刷新再检测会把回合内的失去牌误判成回合外（屯田等技能依赖这个归属）
     syncCardState(state, state.activeGeneralIndex)
+    // 评荐（许劭）：回合结束，失去此时机获得的技能
+    const endingGeneral = state.generals[state.activeGeneralIndex]
+    if (endingGeneral) {
+        resolveNishouSwaps(state)
+        if (endingGeneral.alive) maybeZhuri(state, endingGeneral, true)
+        expirePingjian(state, endingGeneral, 'end')
+    }
     // 放权（刘禅）：本回合结束后，令一名其他角色执行一个额外回合
     if (state.fangquanFor !== undefined) {
         const extraIdx = state.fangquanFor
         state.fangquanFor = undefined
         const extra = state.generals[extraIdx]
         if (extra?.alive) {
-            addLog(state, `【${getGeneralName(extra)}】因【放权】执行一个额外回合`)
+            addLog(state, `【${getGeneralName(extra)}】因【${state.fangquanLabel ?? '放权'}】执行一个额外回合`)
+            state.fangquanLabel = undefined
             state.activeGeneralIndex = extraIdx
             runTurnStart(state)
             return
@@ -3224,10 +3986,11 @@ function hasYingziSkill(general: GeneralInstance): boolean {
 
 /** 检查武将是否拥有某技能（含原生技能 + 觉醒后获得的技能） */
 function hasSkillById(general: GeneralInstance, skillId: string): boolean {
-    if (general.lostSkills?.includes(skillId)) return false
-    const def = getGeneralById(general.generalId)
-    const hasNative = def?.skills.some(s => s.id === skillId) ?? false
-    const hasAcquired = general.acquiredSkills?.includes(skillId) ?? false
+    const gid = general.generalId
+    if (general.lostSkills?.some((id) => skillMatches(gid, id, skillId))) return false
+    const def = getGeneralById(gid)
+    const hasNative = def?.skills.some(s => skillMatches(gid, s.id, skillId)) ?? false
+    const hasAcquired = general.acquiredSkills?.some((id) => skillMatches(gid, id, skillId)) ?? false
     return hasNative || hasAcquired
 }
 

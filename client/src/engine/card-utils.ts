@@ -8,7 +8,7 @@ const CARD_DISPLAY: Record<string, string> = {
     peach_garden: '桃园结义', harvest: '五谷丰登', negate: '无懈可击',
     borrow_sword: '借刀杀人', overindulgence: '乐不思蜀',
     supply_shortage: '兵粮寸断', fire_attack: '火攻', iron_chain: '铁索连环', lightning: '闪电',
-    crossbow: '连弩',
+    crossbow: '诸葛连弩',
     green_dragon: '青龙偃月刀', zhangba_spear: '丈八蛇矛',
     fangtian_halberd: '方天画戟', kylin_bow: '麒麟弓',
     double_swords: '雌雄双股剑', qinggang_sword: '青釭剑',

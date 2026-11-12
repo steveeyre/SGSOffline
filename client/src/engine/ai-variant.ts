@@ -5,7 +5,7 @@
  * 回滚就是丢弃 patch 文件，不会污染 local-ai.ts。
  */
 import { Faction } from 'sgs3v3-shared'
-import { PASS_SCORE } from './ai-policy'
+import { NEGATE_THRESHOLD, PASS_SCORE } from './ai-policy'
 import {
     auditEnabled, evalPredicate, forcedRule, interventionEnabled, validatePredicate,
     type DecisionContext, type Predicate,
@@ -18,7 +18,7 @@ export const THRESHOLD_NAMES: ThresholdName[] = ['PASS_SCORE', 'NEGATE_THRESHOLD
 /** 具名阈值的当前默认值，供审计层向复盘模型说明「原值是多少」 */
 export const THRESHOLD_DEFAULTS: Record<ThresholdName, number> = {
     PASS_SCORE,
-    NEGATE_THRESHOLD: 55,
+    NEGATE_THRESHOLD,
 }
 
 /**

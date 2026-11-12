@@ -348,6 +348,26 @@
     color: var(--color-text-muted);
 }
 
+/* 火攻等公开亮出的手牌：直接列在武将面板上 */
+.general-known-hand {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin-top: 1px;
+}
+
+.known-hand-chip {
+    font-family: var(--font-ui);
+    font-size: 9px;
+    line-height: 1.2;
+    padding: 0 3px;
+    border-radius: 3px;
+    color: #ffe9b0;
+    background: rgba(120, 86, 30, 0.45);
+    border: 1px solid rgba(200, 160, 80, 0.55);
+    white-space: nowrap;
+}
+
 .general-dead-overlay {
     position: absolute;
     inset: 0;
@@ -1189,6 +1209,15 @@
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
 
+/* 护甲：追加在体力角标后面（护甲先于体力被伤害消耗） */
+.hp-badge .armor-tag {
+    margin-left: 3px;
+    font-style: normal;
+    font-weight: 700;
+    color: #7fd4ff;
+    text-shadow: 0 0 6px rgba(90, 190, 255, 0.55);
+}
+
 .commander-badge {
     z-index: 3;
     top: 4px;
@@ -1498,6 +1527,12 @@
 
 .log-skill { color: #e8c05a; }
 .log-damage { color: #ff7a6a; }
+
+/* 武将名不套【】，改用加粗 + 微高亮区分 */
+.log-general {
+    font-weight: 700;
+    color: #f0d9a8;
+}
 
 /* ── 布局修正 ── */
 .general-info {
@@ -2357,4 +2392,759 @@
     .view-card {
         width: 140px;
     }
+}
+
+/* ================================================================
+   布局 v4：中央询问浮层 + 浮动操作坞
+   桌面常驻区（对手行 / 己方行 / 手牌）尺寸固定，
+   询问类 UI 不再占据文档流，动效坐标不随询问状态跳动。
+   ================================================================ */
+
+/* 询问浮层：空置时完全透明、不挡点击 */
+.game-center.ask-overlay {
+    position: absolute;
+    left: 50%;
+    top: 44%;
+    transform: translate(-50%, -50%);
+    width: min(560px, 78cqw);
+    max-height: 64cqh;
+    padding: 0;
+    margin: 0;
+    background: none;
+    border: none;
+    box-shadow: none;
+    z-index: 35;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.game-center.ask-overlay::before {
+    display: none;
+}
+
+.game-center.ask-overlay > * {
+    pointer-events: auto;
+    max-width: 100%;
+}
+
+/* 询问卡片统一浮在桌面上，不再撑高页面 */
+.game-center.ask-overlay .action-unit-choice,
+.game-center.ask-overlay .negate-window-panel,
+.game-center.ask-overlay .pending-response-banner {
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.66);
+    backdrop-filter: blur(2px);
+}
+
+/* 浮动操作坞：贴在手牌区上方，不占独立一行 */
+.action-btns.action-dock {
+    position: absolute;
+    left: 50%;
+    bottom: 190px;
+    transform: translateX(-50%);
+    z-index: 36;
+    max-width: min(900px, 92cqw);
+    padding: 6px 14px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    pointer-events: none;
+}
+
+.action-btns.action-dock > * {
+    pointer-events: auto;
+}
+
+.action-btns.action-dock:not(:empty) {
+    border-color: #6b5127;
+    background: linear-gradient(180deg, rgba(44, 32, 17, 0.96), rgba(14, 10, 6, 0.95));
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.62), inset 0 0 0 1px rgba(232, 192, 90, 0.14);
+}
+
+.action-btns.action-dock:empty {
+    padding: 0;
+    border-width: 0;
+}
+
+/* 手牌区贴底，中间留出桌面空间给浮层与动效 */
+.game-main > .hand-area {
+    margin-top: auto;
+}
+
+/* 目标提示：可选（呼吸描边） / 不可选（压暗） */
+.general-panel.targetable {
+    box-shadow: 0 0 0 2px rgba(232, 192, 90, 0.85), 0 0 18px rgba(232, 192, 90, 0.45);
+    animation: fxTargetableBreath 1.6s ease-in-out infinite;
+}
+
+.general-panel.untargetable {
+    opacity: 0.55;
+    filter: grayscale(0.55);
+}
+
+@keyframes fxTargetableBreath {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(232, 192, 90, 0.75), 0 0 12px rgba(232, 192, 90, 0.3); }
+    50%      { box-shadow: 0 0 0 3px rgba(255, 214, 110, 0.95), 0 0 22px rgba(232, 192, 90, 0.6); }
+}
+
+/* 血珠增减：掉血先裂后灭，回血充能 */
+.hp-gem {
+    transition: background 0.24s ease, border-color 0.24s ease, opacity 0.24s ease;
+}
+
+.hp-gem.breaking {
+    animation: fxGemBreak 0.24s ease-out;
+}
+
+.hp-gem.charging {
+    animation: fxGemCharge 0.28s ease-out;
+}
+
+@keyframes fxGemBreak {
+    0%   { transform: rotate(45deg) scale(1); filter: none; }
+    40%  { transform: rotate(45deg) scale(1.45); filter: brightness(2.4) saturate(1.6); }
+    100% { transform: rotate(45deg) scale(0.55); filter: none; opacity: 0.3; }
+}
+
+@keyframes fxGemCharge {
+    0%   { transform: rotate(45deg) scale(0.35); opacity: 0.2; }
+    60%  { transform: rotate(45deg) scale(1.25); opacity: 1; }
+    100% { transform: rotate(45deg) scale(1); }
+}
+
+
+/* ================================================================
+   视觉重做：传统水墨
+   宣纸茶色桌面 + 暖白牌面 + 墨字，朱砂/花青点缀
+   ================================================================ */
+
+/* ── 桌面：茶色宣纸 + 远山墨晕 ── */
+.game-page {
+    background:
+        radial-gradient(72% 46% at 50% -6%, rgba(62, 78, 90, 0.14) 0%, transparent 62%),
+        radial-gradient(80% 50% at 50% 106%, rgba(120, 96, 52, 0.14) 0%, transparent 66%),
+        linear-gradient(180deg, #e0d2b2 0%, #d3c29e 56%, #c6b28c 100%);
+}
+
+.game-page::before {
+    background-image:
+        repeating-linear-gradient(0deg, rgba(120, 100, 60, 0.030) 0 1px, transparent 1px 4px),
+        repeating-linear-gradient(90deg, rgba(120, 100, 60, 0.020) 0 1px, transparent 1px 6px),
+        radial-gradient(120% 90% at 50% 50%, transparent 55%, rgba(76, 58, 28, 0.18) 100%);
+    box-shadow: inset 0 0 180px rgba(90, 70, 36, 0.22);
+}
+
+.game-center {
+    background: radial-gradient(52% 48% at 50% 50%, rgba(120, 96, 52, 0.10) 0%, transparent 72%);
+}
+
+.game-center::before {
+    border: 1px solid rgba(95, 79, 46, 0.22);
+    box-shadow:
+        inset 0 0 80px rgba(95, 79, 46, 0.10),
+        0 0 0 10px rgba(95, 79, 46, 0.05),
+        0 0 0 11px rgba(255, 255, 255, 0.20);
+}
+
+/* ── 武将面板：纸卡 ── */
+.general-panel {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 42%),
+        linear-gradient(180deg, #f8f1df 0%, #efe3c8 62%, #e4d6b6 100%);
+    border: 1px solid var(--color-border-light);
+    border-radius: 5px;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+        0 6px 16px rgba(80, 60, 28, 0.24);
+}
+
+.general-panel:hover {
+    transform: translateY(-3px);
+    border-color: var(--edge-strong);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.7),
+        0 10px 22px rgba(80, 60, 28, 0.30);
+}
+
+.general-panel.faction-warm {
+    border-color: #b06a52;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+        0 0 0 1px rgba(176, 58, 46, 0.28),
+        0 6px 16px rgba(80, 60, 28, 0.24);
+}
+
+.general-panel.faction-cool {
+    border-color: #6d8a99;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+        0 0 0 1px rgba(51, 86, 107, 0.28),
+        0 6px 16px rgba(80, 60, 28, 0.24);
+}
+
+.general-panel.active {
+    border-color: var(--color-warm);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.7),
+        0 0 0 2px rgba(176, 58, 46, 0.55),
+        0 0 18px rgba(176, 58, 46, 0.25),
+        0 8px 20px rgba(80, 60, 28, 0.28);
+}
+
+.general-panel.target {
+    border-color: #8f2016;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.65),
+        0 0 0 2px rgba(176, 42, 30, 0.65),
+        0 0 20px rgba(176, 42, 30, 0.30);
+}
+
+.general-card-img {
+    background:
+        radial-gradient(90% 70% at 50% 20%, rgba(196, 178, 140, 0.85) 0%, rgba(232, 220, 192, 0.95) 72%),
+        #e8dcc0;
+    border: 1px solid rgba(95, 79, 46, 0.32);
+    border-radius: 3px;
+}
+
+.general-portrait {
+    filter: saturate(0.94) contrast(1.04) brightness(1.0);
+}
+
+.general-name {
+    color: #2b2519;
+    border-bottom: 1px solid rgba(95, 79, 46, 0.26);
+    letter-spacing: 2px;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.general-hand-count {
+    color: #6b5f49;
+}
+
+/* ── 手牌：暖白纸牌 ── */
+.playing-card {
+    border: 1px solid #bfa87a;
+    border-radius: 4px;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 40%),
+        linear-gradient(180deg, #fdf8ea 0%, #f6efdb 54%, #eadec3 100%);
+    color: #241f18;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.9),
+        inset 0 -10px 20px rgba(150, 128, 84, 0.12),
+        0 4px 12px rgba(70, 52, 22, 0.32);
+}
+
+.playing-card:hover {
+    transform: translateY(-14px) scale(1.05);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.95),
+        0 0 0 2px rgba(168, 128, 47, 0.75),
+        0 12px 24px rgba(70, 52, 22, 0.36);
+}
+
+.playing-card.selected {
+    transform: translateY(-16px) scale(1.05);
+    box-shadow:
+        inset 0 0 0 1px #fff,
+        0 0 0 2px var(--color-warm),
+        0 0 18px rgba(176, 58, 46, 0.28),
+        0 12px 24px rgba(70, 52, 22, 0.36);
+}
+
+.playing-card.card-trick {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0) 40%),
+        linear-gradient(180deg, #fdf5f3 0%, #f2e3de 54%, #e6d0c7 100%);
+    border-color: #c0a094;
+}
+
+.playing-card.card-equip {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0) 40%),
+        linear-gradient(180deg, #f6f9fb 0%, #e8eff4 54%, #d5e0e8 100%);
+    border-color: #9cb2bf;
+}
+
+.playing-card.red { color: #a8241a; }
+.playing-card.black { color: #241f18; }
+
+.card-seal {
+    border: 1px solid rgba(122, 96, 52, 0.24);
+    background: radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.55), transparent 62%);
+}
+
+.card-name {
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+/* ── 底部手牌带：宣纸案面 ── */
+.hand-area {
+    border-top: 1px solid rgba(95, 79, 46, 0.42);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0) 34%),
+        linear-gradient(180deg, #ece0c6 0%, #e2d4b4 56%, #d6c6a2 100%);
+    box-shadow:
+        inset 0 8px 20px rgba(120, 96, 52, 0.18),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.view-card {
+    border-right: 1px solid rgba(95, 79, 46, 0.24);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.30), rgba(160, 138, 96, 0.10));
+}
+
+.view-label {
+    color: var(--color-text-dim);
+}
+
+.view-face {
+    border: 1px solid rgba(95, 79, 46, 0.34);
+    background: #e8dcc0;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+
+.view-name {
+    color: #2b2519;
+}
+
+.view-sub,
+.view-stats {
+    color: var(--color-text-muted);
+}
+
+.view-stats b {
+    color: var(--color-warm);
+}
+
+.hand-owner-label {
+    color: var(--color-text-muted);
+}
+
+/* ── 右上角信息条 ── */
+.table-chip {
+    color: #4a4133;
+    background: linear-gradient(180deg, #f6eeda 0%, #e8dcc0 100%);
+    border: 1px solid var(--color-border-light);
+    border-radius: 3px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 2px 6px rgba(70, 52, 22, 0.22);
+}
+
+.table-chip b { color: var(--color-warm); }
+.table-chip.phase { color: #6b5f49; }
+.table-chip.click { border-color: var(--edge); }
+.table-chip.click:hover { background: linear-gradient(180deg, #fdf7e8, #f0e5ca); border-color: var(--edge-strong); }
+
+/* ── 日志栏：宣纸卷 ── */
+.game-log-sidebar {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0) 30%),
+        linear-gradient(180deg, #efe5cd 0%, #e6d9bb 100%);
+    border-left: 1px solid rgba(95, 79, 46, 0.30);
+    box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.5);
+}
+
+.game-log-sidebar-header {
+    color: #3a3122;
+    border-bottom: 1px solid rgba(95, 79, 46, 0.28);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.4), transparent);
+    letter-spacing: 4px;
+}
+
+.log-entry {
+    border-bottom: 1px solid rgba(95, 79, 46, 0.14);
+    color: #3f3628;
+    line-height: 1.65;
+}
+
+.log-entry-clickable:hover {
+    background: rgba(176, 58, 46, 0.06);
+}
+
+.log-skill { color: #8a4a1e; font-weight: 600; }
+.log-damage { color: #a8241a; font-weight: 600; }
+
+.btn-surrender {
+    background: linear-gradient(180deg, #f7ecdc, #e9d8c2);
+    border: 1px solid #b58a72;
+    color: #8d2a22;
+    letter-spacing: 1px;
+}
+
+.btn-surrender:hover {
+    filter: brightness(1.05);
+    color: #6d1d14;
+    border-color: #8d2a22;
+}
+
+/* ── 体力角标 / 手牌数 / 标记 ── */
+.hp-badge {
+    color: #fff6e4;
+    background: linear-gradient(180deg, rgba(64, 52, 32, 0.88), rgba(38, 30, 18, 0.9));
+    border: 1px solid rgba(255, 240, 210, 0.35);
+    box-shadow: 0 1px 4px rgba(60, 45, 20, 0.4);
+}
+
+.hp-badge .armor-tag {
+    color: #9fdcff;
+    text-shadow: none;
+}
+
+.portrait-hand-count {
+    color: #fff6e4;
+    background: rgba(52, 42, 26, 0.85);
+    border: 1px solid rgba(255, 240, 210, 0.30);
+}
+
+.commander-badge {
+    background: linear-gradient(180deg, #b8402f, #8d2a22);
+    color: #fff4ea;
+    border: 1px solid #f0d9c8;
+}
+
+.flank-badge {
+    background: linear-gradient(180deg, #46707f, #335661);
+    color: #f0f8fb;
+    border: 1px solid #d8e8ef;
+}
+
+.chain-badge {
+    background: #f6eeda;
+    border: 1px solid var(--edge);
+    color: #4a4133;
+    box-shadow: 0 1px 4px rgba(70, 52, 22, 0.3);
+}
+
+/* ── 装备 / 判定小格 ── */
+.equip-item {
+    color: #3f3628;
+    background: linear-gradient(180deg, #f7efdc, #e9dcbd);
+    border: 1px solid rgba(95, 79, 46, 0.32);
+}
+
+.general-equip-zone .equip-item {
+    background: linear-gradient(180deg, #f7efdc, #e9dcbd);
+    border-color: rgba(95, 79, 46, 0.32);
+}
+
+.equip-meta { color: var(--color-warm); }
+.equip-weapon { color: #8a5a1e; }
+.equip-armor { color: #2f6478; }
+.equip-horse { color: #4f7d33; }
+
+.judge-item {
+    color: #fff6e8;
+}
+
+.judge-le {
+    background: linear-gradient(180deg, #d08a2c, #a8641a);
+    border-color: #f0c88a;
+}
+
+.judge-bing {
+    background: linear-gradient(180deg, #4a7f9c, #33596b);
+    border-color: #a8d0e0;
+}
+
+.judge-lei {
+    background: linear-gradient(180deg, #6a5aa8, #4a3d7d);
+    border-color: #c4b8e8;
+}
+
+/* ── 操作坞与询问浮层 ── */
+.action-btns.action-dock:not(:empty) {
+    border: 1px solid var(--color-border-light);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 40%),
+        linear-gradient(180deg, #f7efdc 0%, #e9dcbd 100%);
+    box-shadow:
+        0 8px 22px rgba(70, 52, 22, 0.26),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+.action-hint {
+    color: var(--color-text-muted);
+}
+
+.action-unit-choice,
+.pending-response-banner,
+.negate-window-panel {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 42%),
+        linear-gradient(180deg, #f8f1df 0%, #ece0c3 100%);
+    border: 1px solid var(--color-border-light);
+    border-radius: 5px;
+    color: var(--color-text);
+    box-shadow:
+        0 10px 28px rgba(70, 52, 22, 0.28),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.action-choice-label {
+    color: var(--color-warm);
+    letter-spacing: 1px;
+    font-weight: 700;
+}
+
+.action-choice-sub {
+    color: var(--color-text-muted);
+}
+
+.pending-response-banner {
+    background: linear-gradient(180deg, #fbf0d4 0%, #efd9ac 100%);
+    border-color: #b8903f;
+    color: #3a2c10;
+}
+
+.negate-header {
+    color: var(--color-warm);
+}
+
+.negate-sub,
+.negate-countdown {
+    color: var(--color-text-muted);
+}
+
+.negate-alert {
+    background: rgba(176, 58, 46, 0.10);
+    color: #8d2a22;
+}
+
+/* ── 技能按钮：赭金纸签 ── */
+.btn-skill,
+.btn.btn-skill {
+    border-color: #b08a3a;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 46%),
+        linear-gradient(180deg, #faf1d8 0%, #eddfb8 58%, #e0cf9f 100%);
+    color: #6f5420;
+    box-shadow:
+        inset 0 0 0 1px rgba(168, 128, 47, 0.22),
+        0 1px 3px rgba(70, 52, 22, 0.22);
+}
+
+.btn-skill:hover:not(:disabled),
+.btn.btn-skill:hover:not(:disabled) {
+    border-color: #8a6a1e;
+    color: #4a3410;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0) 48%),
+        linear-gradient(180deg, #fdf8e6 0%, #f3e6c4 58%, #e8d7ab 100%);
+    box-shadow:
+        inset 0 0 0 1px rgba(168, 128, 47, 0.34),
+        0 3px 10px rgba(120, 90, 40, 0.24);
+}
+
+.btn-skill.btn-disabled,
+.btn-skill:disabled {
+    opacity: 0.45;
+}
+
+.btn-danger,
+.btn.btn-danger {
+    border-color: #8d2a22;
+    background:
+        linear-gradient(180deg, rgba(255, 220, 205, 0.28) 0%, transparent 50%),
+        linear-gradient(180deg, #b03a2e 0%, #8d2a22 100%);
+    color: #fff4ec;
+}
+
+/* ── 弃牌堆 / 观星面板 ── */
+.discard-modal,
+.arrange-board {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 36%),
+        linear-gradient(180deg, #f7efdc 0%, #e9dcbd 100%);
+    border: 1px solid var(--color-border-light);
+    box-shadow:
+        0 20px 48px rgba(70, 52, 22, 0.34),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.discard-modal-header {
+    color: #3a3122;
+    border-bottom: 1px solid rgba(95, 79, 46, 0.28);
+    letter-spacing: 2px;
+}
+
+.discard-empty {
+    color: var(--color-text-muted);
+}
+
+.discard-modal-card {
+    background: linear-gradient(180deg, #fdf8ea, #ecdfc2);
+    border: 1px solid #bfa87a;
+    color: #241f18;
+}
+
+.arrange-title {
+    color: #3a3122;
+    letter-spacing: 3px;
+}
+
+.arrange-col {
+    border: 1px dashed rgba(95, 79, 46, 0.42);
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.arrange-card {
+    border: 1px solid rgba(95, 79, 46, 0.34);
+    background: linear-gradient(180deg, #fbf4e2, #eddfc0);
+    color: #2b2519;
+}
+
+.arrange-col-head { color: var(--color-warm); }
+.arrange-col.bottom .arrange-col-head { color: var(--color-cool); }
+.arrange-drop-hint { color: var(--color-text-dim); }
+.arrange-card-index { color: var(--color-text-muted); }
+
+/* ── 提示条 ── */
+.review-notice {
+    background: linear-gradient(180deg, #fbf0d4, #efd9ac);
+    border: 1px solid #b8903f;
+    color: #3a2c10;
+}
+
+.game-error-toast {
+    box-shadow: 0 10px 26px rgba(90, 30, 20, 0.30);
+}
+
+/* ── 目标提示 ── */
+.general-panel.targetable {
+    border-color: var(--color-warm);
+    box-shadow:
+        0 0 0 2px rgba(176, 58, 46, 0.45),
+        0 0 16px rgba(176, 58, 46, 0.22);
+}
+
+.general-panel.untargetable {
+    opacity: 0.62;
+    filter: grayscale(0.6);
+}
+
+@keyframes fxTargetableBreath {
+    0%, 100% { box-shadow: 0 0 0 1px rgba(176, 58, 46, 0.40), 0 0 10px rgba(176, 58, 46, 0.16); }
+    50%      { box-shadow: 0 0 0 2px rgba(176, 58, 46, 0.70), 0 0 18px rgba(176, 58, 46, 0.30); }
+}
+
+.view-skills {
+    border-top: 1px dashed rgba(95, 79, 46, 0.30);
+}
+
+/* ── 中央提示：刚打出的牌名 ── */
+.play-banner {
+    position: absolute;
+    left: 50%;
+    top: 34%;
+    z-index: 38;
+    transform: translate(-50%, -50%);
+    font-family: var(--font-display);
+    font-size: 38px;
+    letter-spacing: 6px;
+    color: #3a2c10;
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.85),
+        0 2px 10px rgba(70, 52, 22, 0.35);
+    pointer-events: none;
+    animation: playBannerIn 1.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes playBannerIn {
+    0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.84); }
+    16%  { opacity: 1; transform: translate(-50%, -50%) scale(1.06); }
+    32%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    72%  { opacity: 1; transform: translate(-50%, -54%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -62%) scale(1); }
+}
+
+/* ── AI 思考提示 ── */
+.ai-thinking {
+    position: absolute;
+    top: 46px;
+    right: 14px;
+    z-index: 34;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: #6b5f49;
+    background: rgba(246, 238, 218, 0.92);
+    border: 1px solid rgba(95, 79, 46, 0.28);
+    box-shadow: 0 2px 8px rgba(70, 52, 22, 0.18);
+    pointer-events: none;
+}
+
+.ai-thinking .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #b03a2e;
+    animation: aiPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes aiPulse {
+    0%, 100% { opacity: 0.35; transform: scale(0.8); }
+    50%      { opacity: 1; transform: scale(1.15); }
+}
+
+/* ── 拖拽出牌 ── */
+.hand-cards .playing-card {
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.hand-cards .playing-card.dragging-source {
+    opacity: 0.32;
+    filter: grayscale(0.5);
+    transform: scale(0.96);
+}
+
+.card-drag-ghost {
+    position: fixed;
+    z-index: 9999;
+    pointer-events: none;
+    margin: 0;
+    transform: translate(-50%, -54%) rotate(-3deg) scale(1.06);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+        0 0 0 2px rgba(232, 192, 90, 0.9),
+        0 18px 34px rgba(0, 0, 0, 0.6);
+    opacity: 0.94;
+}
+
+body.card-dragging,
+body.card-dragging * {
+    cursor: grabbing !important;
+}
+
+.general-panel.drag-target {
+    border-color: #7fe08a !important;
+    box-shadow:
+        inset 0 0 0 1px rgba(0, 0, 0, 0.7),
+        0 0 0 2px rgba(127, 224, 138, 0.85),
+        0 0 28px rgba(127, 224, 138, 0.55) !important;
+    transform: translateY(-3px) scale(1.02);
+}
+
+.general-panel.drag-target::after {
+    content: '松手出牌';
+    position: absolute;
+    left: 50%;
+    bottom: -22px;
+    transform: translateX(-50%);
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    white-space: nowrap;
+    color: #0d1a0d;
+    background: #7fe08a;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
 }

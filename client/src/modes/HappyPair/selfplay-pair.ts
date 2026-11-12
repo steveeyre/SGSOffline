@@ -67,8 +67,9 @@ export function runPairSelfPlay(
     humanFaction: Faction,
     maxSteps = 60000,
     onDecision?: (trace: PairSelfPlayTrace) => void,
+    oddityMode = false,
 ): PairSelfPlayResult {
-    const state = createPairMatch(humanFaction, seed)
+    const state = createPairMatch(humanFaction, seed, true, oddityMode)
     finishDraft(state)
     let steps = 0
     for (; steps < maxSteps; steps++) {
@@ -116,6 +117,7 @@ export function runPairSelfPlay(
 const isCli = process.argv[1]?.includes('selfplay-pair')
 if (isCli) {
     const games = Number(process.argv[2] ?? 5)
+    const oddityMode = process.argv[3] === 'oddity'
     let warmWins = 0
     let coolWins = 0
     let failures = 0
@@ -123,7 +125,7 @@ if (isCli) {
     for (let i = 0; i < games; i++) {
         const humanFaction = i % 2 === 0 ? Faction.COOL : Faction.WARM
         const seed = 7000 + i
-        const result = runPairSelfPlay(seed, humanFaction)
+        const result = runPairSelfPlay(seed, humanFaction, 60000, undefined, oddityMode)
         maxSteps = Math.max(maxSteps, result.steps)
         if (!result.ok) {
             failures++
@@ -134,5 +136,5 @@ if (isCli) {
             console.log(`game ${i} seed=${seed} ok winner=${result.winner} steps=${result.steps} rounds=${result.state.roundState.roundNumber} logLines=${result.state.log.length}`)
         }
     }
-    console.log(`\nsummary: games=${games} warmWins=${warmWins} coolWins=${coolWins} failures=${failures} maxSteps=${maxSteps}`)
+    console.log(`\nsummary: games=${games} oddity=${oddityMode} warmWins=${warmWins} coolWins=${coolWins} failures=${failures} maxSteps=${maxSteps}`)
 }

@@ -15,6 +15,7 @@ import { Faction, GeneralDefinition, SkillType } from 'sgs3v3-shared'
 import { synergyWeight } from './general-meta'
 import {
     POSITION_ROLE_LABEL,
+    ROLE_SLOT_BIAS,
     ROLE_TRAITS,
     SLOT_OVERRIDE,
     roleOfGeneral,
@@ -44,6 +45,7 @@ export interface PositionScore {
     total: number
     base: number
     traitFit: number
+    roleBias: number
     override: number
     synergy: number
     matchup: number
@@ -200,6 +202,7 @@ function positionFit(
     }
     traitFit *= POSITION_TRAIT_SCALE
 
+    const roleBias = ROLE_SLOT_BIAS[role]?.[slot] ?? 0
     const override = SLOT_OVERRIDE[def.id]?.[slot] ?? 0
 
     let synergy = 0
@@ -230,6 +233,7 @@ function positionFit(
     }
 
     const reasons = [slotText(slot), `定位：${POSITION_ROLE_LABEL[role]}`]
+    if (roleBias !== 0) reasons.push(`定位适配 ${roleBias > 0 ? '+' : ''}${roleBias}`)
     if (override > 0) reasons.push(`位置先验 +${override}`)
     if (override < 0) reasons.push(`位置先验 ${override}`)
     if (synergy > 0) reasons.push(`与已选配合 +${synergy.toFixed(1)}`)
@@ -237,7 +241,7 @@ function positionFit(
     if (slot === 'coldCommander') reasons.push('冷方主帅第 1 回合先动、起手 4 牌')
     if (slot === 'warmCommander') reasons.push('暖方主帅起手 5 牌，但第一轮最后行动')
 
-    const total = POSITION_BASE[slot] + traitFit + override + synergy + matchup
+    const total = POSITION_BASE[slot] + traitFit + roleBias + override + synergy + matchup
     return {
         position,
         slot,
@@ -245,6 +249,7 @@ function positionFit(
         total,
         base: POSITION_BASE[slot],
         traitFit,
+        roleBias,
         override,
         synergy,
         matchup,
@@ -288,7 +293,7 @@ function combinations<T>(items: T[], count: number): T[][] {
     return out
 }
 
-export type PositionScoreOf = (def: GeneralDefinition, position: Position) => number
+export type PositionScoreOf = (def: GeneralDefinition, position: Position, ctx: PositionContext) => number
 
 /**
  * 枚举“从队伍里选 min(3, 人数) 人，分配到三个位置”的全部方案。
@@ -304,11 +309,12 @@ export function rankDeployments(
         return [{ assignment: { commander: null, flankA: null, flankB: null }, total: 0, positions: [] }]
     }
 
-    const score = (def: GeneralDefinition, position: Position) =>
-        scoreOf ? scoreOf(def, position) : positionFit(def, position, ctx).total
-
     const results: DeploymentScore[] = []
     for (const group of combinations(team, take)) {
+        // 配合只在上阵的这三人之间计算；替补席不该给正选加成
+        const groupCtx: PositionContext = ctx.team ? { ...ctx, team: group } : ctx
+        const score = (def: GeneralDefinition, position: Position) =>
+            scoreOf ? scoreOf(def, position, groupCtx) : positionFit(def, position, groupCtx).total
         for (const slots of positionAssignments(take)) {
             const assignment: Record<Position, GeneralDefinition | null> = {
                 commander: null, flankA: null, flankB: null,
@@ -319,7 +325,7 @@ export function rankDeployments(
                 const def = group[index]
                 const value = score(def, position)
                 assignment[position] = def
-                positions.push({ ...positionFit(def, position, ctx), total: value })
+                positions.push({ ...positionFit(def, position, groupCtx), total: value })
                 total += value
             })
             results.push({ assignment, total, positions })
@@ -348,12 +354,12 @@ export function teamValue(
 ): number {
     const best = bestDeployment(team, ctx, scoreOf)
     const starters = new Set(Object.values(best.assignment).filter(Boolean).map((g) => g!.id))
-    const score = (def: GeneralDefinition, position: Position) =>
-        scoreOf ? scoreOf(def, position) : positionFit(def, position, ctx).total
+    const score = (def: GeneralDefinition, position: Position, scoreCtx: PositionContext) =>
+        scoreOf ? scoreOf(def, position, scoreCtx) : positionFit(def, position, scoreCtx).total
     let bench = 0
     for (const def of team) {
         if (starters.has(def.id)) continue
-        bench += Math.max(...POSITIONS.map((position) => score(def, position))) * 0.12
+        bench += Math.max(...POSITIONS.map((position) => score(def, position, ctx))) * 0.12
     }
     return best.total + bench
 }

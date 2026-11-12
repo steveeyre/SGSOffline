@@ -1,6 +1,7 @@
 import type { GameState, LogEntry } from 'sgs3v3-shared'
 import { getGeneralById } from './generals'
 import { cardFullName } from './card-utils'
+import { readStorageItem, removeStorageItem } from './storage-keys'
 
 /**
  * 玩家对局日志：记录每一手的操作、参与武将与该手产生的引擎日志，
@@ -14,7 +15,7 @@ import { cardFullName } from './card-utils'
  * 因此界面点任意一条日志都能拼出可直接检索的 ID。
  */
 
-const STORAGE_KEY = 'sgs3v3.matchLogs.v1'
+const STORAGE_KEY = 'sgsoffline.matchLogs.v1'
 const MAX_RECORDS = 100
 
 /** 生成对局复盘 ID；单机下一毫秒内同种子重复开局不会出现 */
@@ -113,6 +114,10 @@ export interface MatchLogRecord {
     startedAt: number
     endedAt?: number
     winner?: string
+    /** 本地玩家执哪一方；hotseat / 旧记录可能没有 */
+    humanFaction?: string
+    /** 左右手对弈（同屏两人），不计入普通胜率 */
+    hotseat?: boolean
     generals: Array<{ seat: number; id: string; name: string; faction: string; role: string }>
     actions: MatchLogAction[]
     decisions: DecisionRecord[]
@@ -206,18 +211,37 @@ export function detectKeyEvents(logs: string[], before: DecisionSnapshot, after:
     return [...events]
 }
 
-export function beginMatchLog(state: GameState, seed: number | null, mode: string): void {
+export function beginMatchLog(
+    state: GameState,
+    seed: number | null,
+    mode: string,
+    meta: { humanFaction?: string | null; hotseat?: boolean } = {},
+): void {
     // 上一局若未正常结束（重开/退出），先落盘避免丢失
     if (current) finishMatchLog()
     const startedAt = Date.now()
     const id = makeMatchId(seed, startedAt)
     state.matchId = id
+    // 开局日志（随机种子、选将提示）在 beginMatchLog 之前就写进了 state.log，
+    // 不补 matchId 的话点它们只会提示“没有复盘 ID”
+    let seq = state.logSeq ?? 0
+    for (const entry of state.log) {
+        if (entry.matchId) continue
+        entry.matchId = id
+        if (entry.seq === undefined) {
+            seq += 1
+            entry.seq = seq
+        }
+    }
+    state.logSeq = seq
     current = {
         version: 2,
         id,
         mode,
         seed,
         startedAt,
+        humanFaction: meta.humanFaction ?? undefined,
+        hotseat: meta.hotseat,
         generals: state.generals.map((g, i) => ({
             seat: i,
             id: g.generalId,
@@ -232,6 +256,16 @@ export function beginMatchLog(state: GameState, seed: number | null, mode: strin
 
 export function isMatchLogging(): boolean {
     return current !== null
+}
+
+/** 未结束对局的全量记录：断点续局时随局面一起落盘 */
+export function exportCurrentMatchLog(): MatchLogRecord | null {
+    return current
+}
+
+/** 断点续局恢复：把上次未结束的记录接回来，操作/决策序号接着往下编 */
+export function resumeMatchLog(record: MatchLogRecord | null): void {
+    current = record
 }
 
 export function recordMatchAction(
@@ -365,7 +399,7 @@ export function listMatchLogs(): MatchLogRecord[] {
     const store = safeStorage()
     if (!store) return []
     try {
-        const raw = store.getItem(STORAGE_KEY)
+        const raw = readStorageItem(store, STORAGE_KEY)
         const parsed = raw ? JSON.parse(raw) : []
         if (!Array.isArray(parsed)) return []
         // 旧版本记录没有 id：按同样的规则补出来，保证导出的历史局也能检索
@@ -376,7 +410,8 @@ export function listMatchLogs(): MatchLogRecord[] {
 }
 
 export function clearMatchLogs(): void {
-    safeStorage()?.removeItem(STORAGE_KEY)
+    const store = safeStorage()
+    if (store) removeStorageItem(store, STORAGE_KEY)
 }
 
 export function exportMatchLogs(): string {
@@ -392,7 +427,7 @@ export function downloadMatchLogs(): void {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `sgs3v3-matchlogs-${new Date().toISOString().slice(0, 10)}.json`
+    a.download = `sgsoffline-matchlogs-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     URL.revokeObjectURL(url)
 }

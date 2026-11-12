@@ -16,6 +16,8 @@ export type PlanKind = 'value' | 'control' | 'burst' | 'defense'
 
 /** 低于此分的动作视为“不如留牌”，直接结束出牌阶段 */
 export const PASS_SCORE = 20
+/** 无懈可击响应的分数门槛，低于此分宁可留着这张牌 */
+export const NEGATE_THRESHOLD = 45
 /** 计划胜出时给该计划内动作的加成，只用来打破同分，不改变层次顺序 */
 export const PLAN_BONUS = 4
 /** §4 目标公式的缩放：让目标修正与基础分同量级 */

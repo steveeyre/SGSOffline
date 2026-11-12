@@ -14,9 +14,13 @@ import {
     dispatchLocalDeployGenerals,
     dispatchLocalDiscard,
     dispatchLocalEndTurn,
+    dispatchLocalLandlordConfirmPick,
     dispatchLocalLandlordPick,
+    dispatchLocalLandlordPointPick,
     dispatchLocalNegateRespond,
+    dispatchLocalPairConfirmPick,
     dispatchLocalPairPick,
+    dispatchLocalPairPointPick,
     dispatchLocalPickGeneral,
     dispatchLocalRespond,
     dispatchLocalSurrender,
@@ -34,6 +38,18 @@ export const emit = {
 
     pairPick: (data: { seat: number; generalId: string }) =>
         dispatchLocalPairPick(data.seat, data.generalId),
+
+    landlordConfirmPick: (data: { poolIndex: number; generalId: string; oddityId: string }) =>
+        dispatchLocalLandlordConfirmPick(data.poolIndex, data.generalId, data.oddityId),
+
+    pairConfirmPick: (data: { seat: number; generalId: string; oddityId: string }) =>
+        dispatchLocalPairConfirmPick(data.seat, data.generalId, data.oddityId),
+
+    landlordPointPick: (data: { poolIndex: number; generalId: string; oddityId?: string }) =>
+        dispatchLocalLandlordPointPick(data.poolIndex, data.generalId, data.oddityId),
+
+    pairPointPick: (data: { seat: number; generalId: string; oddityId?: string }) =>
+        dispatchLocalPairPointPick(data.seat, data.generalId, data.oddityId),
 
     deployGenerals: (data: C2S_DeployGenerals) =>
         dispatchLocalDeployGenerals(data.commander, data.flankA, data.flankB),

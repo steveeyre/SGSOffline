@@ -40,8 +40,7 @@ export function rememberCards(state: GameState, generalIndex: number, cards: Car
 }
 
 /** 记忆里的明牌中，此刻仍在指定角色手上的那些（牌一旦离手记忆即作废） */
-export function knownHand(state: GameState, generalIndex: number): Card[] {
-    const map = memories.get(state)
+export function knownHand(state: GameState, generalIndex: number): Card[] {    const map = memories.get(state)
     const g = state.generals[generalIndex]
     if (!map || !g) return []
     const ids = new Set(g.hand.map((c) => c.id))
@@ -52,6 +51,35 @@ export function knownHand(state: GameState, generalIndex: number): Card[] {
         else map.delete(id)
     }
     return out
+}
+
+/** 记忆快照：断点续局时随局面一起落盘，恢复后 AI 不会忘记之前亮过的牌 */
+export interface MemoryEntry {
+    id: string
+    card: Card
+    ownerIndex: number
+    source: string
+    round: number
+}
+
+export function exportMemory(state: GameState): MemoryEntry[] {
+    const map = memories.get(state)
+    if (!map) return []
+    return [...map].map(([id, rec]) => ({ id, ...rec }))
+}
+
+export function importMemory(state: GameState, snapshot: MemoryEntry[] | null | undefined): void {
+    if (!snapshot || snapshot.length === 0) return
+    const map = new Map<string, Remembered>()
+    for (const entry of snapshot) {
+        map.set(entry.id, {
+            card: entry.card,
+            ownerIndex: entry.ownerIndex,
+            source: entry.source,
+            round: entry.round,
+        })
+    }
+    memories.set(state, map)
 }
 
 const KIND_BY_NAME: Record<string, keyof typeof KEY_CARD_COUNTS | undefined> = {
@@ -340,8 +368,8 @@ export function predictEnemyTurn(
         getAttackRange(g, commander, state.generals).inRange
     // 对方主帅手里的闪决定我们这边挨不挨得住
     const dodge = commander ? Math.min(0.8, 0.2 + commander.hand.length * 0.12) : 0.4
-    // 连弩是“可额外使用 3 张杀”，即一回合最多 4 张；没有连弩时为 1 张
-    const slashCap = crossbow ? 4 : 1
+    // 诸葛连弩默认不限次数（按 99 估算）；开启“限五次”规则时按 5 张；没有连弩时为 1 张
+    const slashCap = crossbow ? (state.skillLimitRule === 'limited' ? 5 : 99) : 1
     const rawDamage = reachesCommander
         ? Math.min(guess.expected.slash, slashCap) * (1 - dodge) +
             (guess.atLeastOne('slash') > 0.5 && guess.size >= 3 ? 0.3 : 0)

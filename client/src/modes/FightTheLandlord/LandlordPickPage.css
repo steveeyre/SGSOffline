@@ -63,6 +63,32 @@
     color: var(--color-text-muted);
 }
 
+/* 席位标题右侧：点将按钮 + 阵营标签 */
+.landlord-pick-seat-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.gp-open {
+    flex: 0 0 auto;
+    padding: 1px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(201, 162, 39, 0.6);
+    background: rgba(201, 162, 39, 0.12);
+    color: #e8dcc0;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 1px;
+    cursor: pointer;
+}
+
+.gp-open:hover {
+    border-color: #ffd700;
+    color: #ffe066;
+}
+
 .landlord-pick-cards {
     flex: 1 1 auto;
     min-height: 0;
@@ -235,5 +261,247 @@
     to {
         opacity: 1;
         transform: translateY(0) scale(1);
+    }
+}
+
+/* ── 奇技模式：武将区与奇技区平分列高 ── */
+.landlord-pick-page.oddity-mode .landlord-pick-cards {
+    flex: 1 1 0;
+}
+
+.oddity-block {
+    display: flex;
+    flex: 0 1 auto;
+    min-height: 0;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.oddity-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex: 0 0 auto;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--color-text-muted);
+}
+
+.oddity-list {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
+    gap: 4px;
+    overflow-y: auto;
+}
+
+.oddity-card {
+    flex: 0 0 auto;
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(150, 128, 255, 0.4);
+    background: rgba(110, 86, 220, 0.12);
+    transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.oddity-card.selectable {
+    cursor: pointer;
+}
+
+.oddity-card.selectable:hover {
+    border-color: #b49bff;
+    transform: translateX(1px);
+}
+
+.oddity-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px;
+}
+
+.oddity-name {
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 700;
+    color: #e8ddff;
+}
+
+.oddity-source {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--color-text-muted);
+}
+
+.oddity-desc {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.25;
+    color: var(--color-text-muted);
+}
+
+.oddity-card.taken {
+    border-color: #57c785;
+    background: rgba(87, 199, 133, 0.12);
+}
+
+.oddity-confirm {
+    flex: 0 0 auto;
+    width: 100%;
+    padding: 3px 0;
+    font-size: 13px;
+    letter-spacing: 2px;
+}
+
+.oddity-confirm:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* 单击选中：持续闪动的金色描边 */
+@keyframes pickFlash {
+    0%, 100% {
+        box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.7), 0 0 4px rgba(255, 215, 0, 0.3);
+        border-color: rgba(255, 215, 0, 0.75);
+    }
+    50% {
+        box-shadow: inset 0 0 0 2px rgba(255, 235, 130, 1), 0 0 18px rgba(255, 215, 0, 0.85);
+        border-color: #ffe066;
+    }
+}
+
+
+/* ── 传统水墨：选将页 ── */
+.landlord-pick-page {
+    background:
+        radial-gradient(70% 42% at 50% -6%, rgba(62, 78, 90, 0.12) 0%, transparent 64%),
+        radial-gradient(80% 50% at 50% 106%, rgba(120, 96, 52, 0.12) 0%, transparent 66%),
+        linear-gradient(180deg, #e6dabd 0%, #d9caa7 60%, #cebc93 100%);
+}
+
+.landlord-pick-title {
+    color: #4a4133;
+    letter-spacing: 6px;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.landlord-pick-column {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0) 38%),
+        linear-gradient(180deg, #f3e9d3 0%, #e6d8b9 100%);
+    border: 1px solid var(--color-border-light);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+        0 6px 18px rgba(80, 60, 28, 0.20);
+}
+
+.landlord-pick-column.landlord {
+    border-color: #b08a3a;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+        0 0 0 1px rgba(168, 128, 47, 0.30),
+        0 6px 18px rgba(80, 60, 28, 0.20);
+}
+
+.landlord-pick-column.mine {
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+        0 0 0 2px rgba(176, 58, 46, 0.45),
+        0 6px 18px rgba(80, 60, 28, 0.22);
+}
+
+.landlord-pick-seat { color: #2b2519; letter-spacing: 2px; }
+.landlord-pick-owner { color: var(--color-text-muted); }
+
+.gp-open {
+    border-color: rgba(168, 128, 47, 0.55);
+    background: rgba(168, 128, 47, 0.12);
+    color: #6f5420;
+}
+
+.gp-open:hover {
+    border-color: var(--color-warm);
+    color: var(--color-warm);
+    background: rgba(176, 58, 46, 0.08);
+}
+
+.landlord-pick-card {
+    border: 1px solid var(--color-border);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.12));
+}
+
+.landlord-pick-card.selectable:hover {
+    border-color: var(--color-warm);
+    box-shadow: 0 4px 14px rgba(70, 52, 22, 0.26);
+}
+
+.lpc-portrait {
+    background: radial-gradient(90% 70% at 50% 22%, rgba(200, 184, 148, 0.9) 0%, rgba(232, 220, 192, 0.95) 72%);
+    border: 1px solid rgba(95, 79, 46, 0.30);
+}
+
+.lpc-avatar { color: rgba(95, 79, 46, 0.30); }
+.lpc-hp { color: #f4e2c0; }
+.lpc-name { color: #fff8ea; }
+
+.landlord-pick-card.picked {
+    border-color: #4f7d33;
+    background: rgba(79, 125, 51, 0.10);
+}
+
+.landlord-pick-badge {
+    background: rgba(240, 250, 236, 0.92);
+    color: #3f7a2e;
+}
+
+.landlord-pick-card.pending {
+    border-color: var(--color-warm);
+    background: rgba(176, 58, 46, 0.08);
+}
+
+.landlord-pick-badge.pending { color: var(--color-warm); }
+
+.landlord-pick-card.selected,
+.oddity-card.selected {
+    background: rgba(176, 58, 46, 0.08);
+}
+
+.landlord-pick-hidden {
+    border: 1px dashed rgba(95, 79, 46, 0.36);
+    background: rgba(255, 255, 255, 0.22);
+}
+
+.landlord-pick-status { color: var(--color-text-muted); }
+
+/* 奇技卡：花青 */
+.oddity-card {
+    border: 1px solid rgba(51, 86, 107, 0.40);
+    background: linear-gradient(180deg, rgba(51, 86, 107, 0.10), rgba(255, 255, 255, 0.24));
+}
+
+.oddity-card.selectable:hover { border-color: var(--color-cool); }
+.oddity-name { color: #24404f; }
+
+.oddity-card.taken {
+    border-color: #4f7d33;
+    background: rgba(79, 125, 51, 0.10);
+}
+
+.oddity-label { color: var(--color-text-muted); letter-spacing: 2px; }
+
+@keyframes pickFlash {
+    0%, 100% {
+        box-shadow: inset 0 0 0 1px rgba(176, 58, 46, 0.45), 0 0 4px rgba(176, 58, 46, 0.16);
+        border-color: rgba(176, 58, 46, 0.55);
+    }
+    50% {
+        box-shadow: inset 0 0 0 2px rgba(176, 58, 46, 0.75), 0 0 14px rgba(176, 58, 46, 0.28);
+        border-color: var(--color-warm);
     }
 }

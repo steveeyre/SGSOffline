@@ -1,11 +1,13 @@
 import {
     Faction,
+    GameMode,
     GamePhase,
     GameState,
     GeneralDefinition,
     PICK_SEQUENCE,
     Player,
     SeatRole,
+    SkillLimitRule,
     TurnPhase,
 } from 'sgs3v3-shared'
 import { createDeck, getDeckPreference, shuffleDeck } from './cards'
@@ -29,6 +31,8 @@ export function createLocalMatch(
     seed: number = newRandomSeed(),
     hotseat = false,
     poolVersion?: GeneralPoolVersion,
+    skillLimitRule?: SkillLimitRule,
+    weaponEnhance?: boolean,
 ): GameState {
     setRandomSeed(seed)
     const humanSide = hotseat ? Faction.WARM : humanFaction
@@ -40,6 +44,9 @@ export function createLocalMatch(
     const state: GameState = {
         roomId: 'local',
         phase: GamePhase.GENERAL_PICK,
+        mode: GameMode.CLASSIC,
+        skillLimitRule,
+        weaponEnhance,
         players: { [HUMAN_PLAYER_ID]: human, [ai.id]: ai },
         warmPlayerId: humanSide === Faction.WARM ? HUMAN_PLAYER_ID : AI_PLAYER_ID,
         coolPlayerId: humanSide === Faction.COOL ? HUMAN_PLAYER_ID : (hotseat ? HUMAN2_PLAYER_ID : AI_PLAYER_ID),
@@ -163,7 +170,8 @@ export function localDeployGenerals(
         // 怀橘（陆绩）：游戏开始时获得3个“橘”
         for (const general of state.generals) {
             const def = getGeneralById(general.generalId)
-            if (def?.skills.some((s) => s.id === 'luji_huaiyu')) {
+            if (!def) continue
+            if (def.skills.some((s) => s.id === 'luji_huaiyu')) {
                 general.orangeMarks = 3
                 addLog(state, `【${def.name}】发动【怀橘】，获得3个“橘”`)
             }
@@ -171,6 +179,22 @@ export function localDeployGenerals(
             if (def?.skills.some((s) => s.id === 'zhanghulelin_xijue')) {
                 general.jueMarks = 4
                 addLog(state, `【${def.name}】发动【袭爵】，获得4个“爵”`)
+            }
+            // 矢北（界沮授）：游戏开始时失去1点体力并获得3点护甲
+            if (def?.skills.some((s) => s.id === 'jushou_jie_shibei')) {
+                general.hp -= 1
+                general.armorPoints = (general.armorPoints ?? 0) + 3
+                addLog(state, `【${def.name}】发动【矢北】，失去1点体力并获得3点护甲`)
+            }
+            // 英魂（界孙坚）：游戏开始时失去1点体力
+            if (general.generalId === 'sunjian_jie') {
+                general.hp -= 1
+                addLog(state, `【${def.name}】发动【英魂】，游戏开始时失去1点体力`)
+            }
+            // 魄袭（神甘宁）：游戏开始时失去3点体力
+            if (def?.skills.some((s) => s.id === 'ganning_shen_poxi')) {
+                general.hp = Math.max(1, general.hp - 3)
+                addLog(state, `【${def.name}】发动【魄袭】，游戏开始时失去3点体力`)
             }
         }
         for (const general of state.generals) {

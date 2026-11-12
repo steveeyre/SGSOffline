@@ -3,13 +3,24 @@
 }
 
 .pair-pick-column.cool {
-    border-color: rgba(96, 170, 255, 0.55);
+    border-color: rgba(107, 180, 245, 0.5);
 }
 
 .pair-pick-column.warm {
-    border-color: rgba(255, 150, 90, 0.55);
+    border-color: rgba(255, 116, 84, 0.5);
 }
 
 .pair-pick-column.mine {
-    box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.35);
+    box-shadow:
+        0 0 0 1px rgba(201, 162, 83, 0.5),
+        0 0 20px rgba(201, 162, 83, 0.16);
+}
+
+/* 四列时每列更窄，奇技描述只留两行 */
+.pair-pick-columns .oddity-desc {
+    -webkit-line-clamp: 2;
+}
+
+.pair-pick-columns .oddity-source {
+    display: none;
 }

@@ -19,6 +19,15 @@ export function newRandomSeed(): number {
     return Math.floor(Math.random() * 0x100000000) >>> 0
 }
 
+/** 当前随机游标：断点续局时与种子一起落盘，恢复后随机序列从原位继续 */
+export function getRandomCursor(): number {
+    return cursor
+}
+
+export function setRandomCursor(next: number): void {
+    cursor = next | 0
+}
+
 /** mulberry32：小而稳定、可序列化的伪随机数发生器 */
 export function random(): number {
     cursor = (cursor + 0x6d2b79f5) | 0

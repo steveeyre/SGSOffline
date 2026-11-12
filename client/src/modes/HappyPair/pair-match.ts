@@ -3,19 +3,23 @@ import {
     GameMode,
     GamePhase,
     GameState,
+    PairPickState,
     Player,
     SeatRole,
+    SkillLimitRule,
     TurnPhase,
 } from 'sgs3v3-shared'
 import { createDeck158, shuffleDeck } from '../../engine/cards'
 import { drawCards } from '../../engine/deck'
-import { addLog, createGeneralInstance } from '../../engine/game-state'
+import { addLog, createGeneralInstance, hasSkillOnGeneral } from '../../engine/game-state'
 import { triggerShuzhiChoose } from '../../engine/game-actions'
 import { getGeneralById } from '../../engine/generals'
 import { AI_PLAYER_ID, HUMAN_PLAYER_ID } from '../../engine/local-match'
 import { newRandomSeed, setRandomSeed } from '../../engine/rng'
 import { runTurnStart } from '../../engine/turn-manager'
-import { aiPairDraft, buildPairPools, pairSeatsOf } from './pair-draft'
+import { resetSkillUses } from '../../engine/skill-limit'
+import { drawOddities, oddityCatalog, pickOddity } from '../../engine/oddity'
+import { aiPairDraft, buildPairPools, getPairPointPickPool, pairSeatsOf } from './pair-draft'
 
 /** 欢乐成双座次阵营：1 号位冷、2 号位暖、3 号位暖、4 号位冷 */
 export const PAIR_SEAT_FACTIONS: Faction[] = [
@@ -47,23 +51,42 @@ export function createPairMatch(
     humanFaction: Faction,
     seed: number = newRandomSeed(),
     autoDraft = true,
+    oddityMode = false,
+    skillLimitRule?: SkillLimitRule,
+    weaponEnhance?: boolean,
 ): GameState {
     setRandomSeed(seed)
     const aiFaction = humanFaction === Faction.WARM ? Faction.COOL : Faction.WARM
     const human: Player = { id: HUMAN_PLAYER_ID, nickname: '我', faction: humanFaction, connected: true }
     const ai: Player = { id: AI_PLAYER_ID, nickname: 'AI', faction: aiFaction, connected: true }
+    const pools = buildPairPools()
+    const pairPick: PairPickState = { pools, picked: [null, null, null, null] }
+    if (oddityMode) {
+        // 玩家先选、电脑后选：人类席位的候选此刻抽好，AI 席位等玩家选完后由 aiPairDraft 现场抽取
+        const humanSeats = new Set(pairSeatsOf(humanFaction))
+        const used: string[] = []
+        pairPick.oddities = pools.map((pool, i) => {
+            if (!autoDraft && !humanSeats.has(i)) return []
+            // 先排除该席位武将已有技能，再排除前面席位已抽到的，避免重复
+            const own = pool.flatMap((g) => g.skills.map((s) => s.id))
+            const options = drawOddities([...own, ...used])
+            used.push(...options.map((o) => o.skillId))
+            return options
+        })
+        pairPick.oddityPicked = [null, null, null, null]
+    }
     const state: GameState = {
         roomId: 'local',
         phase: GamePhase.GENERAL_PICK,
         mode: GameMode.HUANLE_SHUANG,
+        oddityMode: oddityMode || undefined,
+        skillLimitRule,
+        weaponEnhance,
         pairHumanSide: humanFaction,
         players: { [human.id]: human, [ai.id]: ai },
         warmPlayerId: humanFaction === Faction.WARM ? HUMAN_PLAYER_ID : AI_PLAYER_ID,
         coolPlayerId: humanFaction === Faction.COOL ? HUMAN_PLAYER_ID : AI_PLAYER_ID,
-        pairPick: {
-            pools: buildPairPools(),
-            picked: [null, null, null, null],
-        },
+        pairPick,
         generals: [],
         deck: [],
         discard: [],
@@ -77,16 +100,47 @@ export function createPairMatch(
     }
     addLog(state, `随机种子 ${seed}（出现异常时可用此种子复现本局）`)
     addLog(state, '欢乐成双：1 号位冷色、2/3 号位暖色、4 号位冷色，四方同时选将')
+    if (oddityMode) addLog(state, '奇技模式：每名角色另有 3 个奇技候选，选定武将时一并选择')
     // autoDraft=false 时把 AI 席位的选将留给调用方（自对弈/校测构造固定阵容用）
     if (autoDraft) aiPairDraft(state, () => setupPairPlay(state))
     return state
 }
 
-/** 本地玩家在自己阵营的座位上选将 */
+/** 本地玩家在自己阵营的座位上选将（非奇技模式：武将即选即定） */
 export function pairPickGeneral(
     state: GameState,
     seat: number,
     generalId: string,
+): { error: string } | { done: boolean } {
+    return commitPairPick(state, seat, generalId)
+}
+
+/** 奇技模式：武将 + 奇技一并提交（界面点“确认”时调用） */
+export function pairConfirmPick(
+    state: GameState,
+    seat: number,
+    generalId: string,
+    oddityId: string,
+): { error: string } | { done: boolean } {
+    return commitPairPick(state, seat, generalId, oddityId)
+}
+
+/** 点将：从模式全池任选武将，仍受“场上不重复”与奇技规则约束 */
+export function pairPointPick(
+    state: GameState,
+    seat: number,
+    generalId: string,
+    oddityId?: string,
+): { error: string } | { done: boolean } {
+    return commitPairPick(state, seat, generalId, oddityId, true)
+}
+
+function commitPairPick(
+    state: GameState,
+    seat: number,
+    generalId: string,
+    oddityId?: string,
+    fromPointPick = false,
 ): { error: string } | { done: boolean } {
     const pick = state.pairPick
     if (!pick || state.phase !== GamePhase.GENERAL_PICK) return { error: '不在选将阶段' }
@@ -95,12 +149,33 @@ export function pairPickGeneral(
     if (!humanSide) return { error: '当前不是欢乐成双对局' }
     if (!pairSeatsOf(humanSide).includes(seat)) return { error: '该席位由 AI 选择' }
     if (pick.picked[seat]) return { error: '该席位已选好武将' }
-    const pool = pick.pools[seat]
-    if (!pool.some((g) => g.id === generalId)) return { error: '武将不在可选池中' }
+    if (fromPointPick) {
+        if (!getPairPointPickPool().some((g) => g.id === generalId)) return { error: '武将不在点将池中' }
+    } else {
+        const pool = pick.pools[seat]
+        if (!pool.some((g) => g.id === generalId)) return { error: '武将不在可选池中' }
+    }
     if (pick.picked.some((id, i) => i !== seat && id === generalId)) return { error: '武将已被选走' }
+
+    // 奇技模式：未显式给出时由规则 AI 兜底（自对弈、脚本构造局面的路径）
+    let oddity = oddityId
+    if (pick.oddityPicked) {
+        if (!oddity) oddity = pickOddity(pick.oddities?.[seat] ?? [])?.skillId
+        if (!oddity) return { error: '请选择奇技' }
+        // 奇技可任选：只要求是奇技目录里的技能，候选 3 个只是快捷入口
+        if (!oddityCatalog().some((o) => o.skillId === oddity)) return { error: '奇技不存在' }
+        // AI 的奇技在玩家之后才抽，这里只拦两个席位都提交完后的重复
+        if (pick.oddityPicked.some((id, i) => i !== seat && id === oddity)) return { error: '该奇技已被其他席位选定' }
+        pick.oddityPicked[seat] = oddity
+    }
+
     pick.picked[seat] = generalId
-    addLog(state, `【${seat + 1} 号位】选定武将【${getGeneralById(generalId)?.name ?? generalId}】`)
+    const generalName = getGeneralById(generalId)?.name ?? generalId
+    const oddityName = oddityCatalog().find((o) => o.skillId === oddity)?.skillName
+    addLog(state, `【${seat + 1} 号位】选定武将【${generalName}】`
+        + (oddity ? `，奇技【${oddityName ?? oddity}】` : ''))
     const allPicked = pick.picked.every((id) => id !== null)
+        && (!pick.oddityPicked || pick.oddityPicked.every((id) => id !== null))
     if (allPicked) setupPairPlay(state)
     return { done: allPicked }
 }
@@ -112,25 +187,40 @@ export function setupPairPlay(state: GameState): void {
     if (!pick.picked.every((id) => id !== null)) return
 
     state.generals = pick.picked.map((id, i) => {
-        const def = pick.pools[i].find((g) => g.id === id)!
+        // 点将可能选出本席位池外的武将，按模式全池兜底查找
+        const def = pick.pools[i].find((g) => g.id === id)
+            ?? getPairPointPickPool().find((g) => g.id === id)!
         const faction = PAIR_SEAT_FACTIONS[i]
         const playerId = faction === Faction.WARM ? state.warmPlayerId : state.coolPlayerId
-        return createGeneralInstance(def, playerId, faction, SeatRole.FLANK_A)
+        const general = createGeneralInstance(def, playerId, faction, SeatRole.FLANK_A)
+        const oddity = pick.oddityPicked?.[i]
+        if (oddity) {
+            general.acquiredSkills.push(oddity)
+            const name = oddityCatalog().find((o) => o.skillId === oddity)?.skillName ?? oddity
+            addLog(state, `【${def.name}】获得奇技【${name}】`)
+        }
+        return general
     })
 
     state.deck = shuffleDeck(createDeck158('tongshuai156'))
 
     // 怀橘（陆绩）：游戏开始时获得3个“橘”
+    // 用 hasSkillOnGeneral 而非 def.skills，奇技授予的同名技能同样在开局补标记
     for (const general of state.generals) {
-        const def = getGeneralById(general.generalId)
-        if (def?.skills.some((s) => s.id === 'luji_huaiyu')) {
+        const name = getGeneralById(general.generalId)?.name ?? general.generalId
+        if (hasSkillOnGeneral(general, 'luji_huaiyu')) {
             general.orangeMarks = 3
-            addLog(state, `【${def.name}】发动【怀橘】，获得3个“橘”`)
+            addLog(state, `【${name}】发动【怀橘】，获得3个“橘”`)
         }
         // 袭爵（张虎乐綝）：游戏开始时获得4个“爵”
-        if (def?.skills.some((s) => s.id === 'zhanghulelin_xijue')) {
+        if (hasSkillOnGeneral(general, 'zhanghulelin_xijue')) {
             general.jueMarks = 4
-            addLog(state, `【${def.name}】发动【袭爵】，获得4个“爵”`)
+            addLog(state, `【${name}】发动【袭爵】，获得4个“爵”`)
+        }
+        // 魄袭（神甘宁）：游戏开始时失去3点体力
+        if (hasSkillOnGeneral(general, 'ganning_shen_poxi')) {
+            general.hp = Math.max(1, general.hp - 3)
+            addLog(state, `【${name}】发动【魄袭】，游戏开始时失去3点体力`)
         }
     }
 
@@ -142,13 +232,13 @@ export function setupPairPlay(state: GameState): void {
 
     // 巨贾（糜竺）：游戏开始时多摸 X 张牌（X 为体力上限）
     for (const general of state.generals) {
-        const def = getGeneralById(general.generalId)
-        if (!def?.skills.some((s) => s.id === 'mizhu_jujia')) continue
+        if (!hasSkillOnGeneral(general, 'mizhu_jujia')) continue
         if (general.jujiaDrawn) continue
         const jujiaCards = drawCards(state, general.maxHp)
         general.hand.push(...jujiaCards)
         general.jujiaDrawn = true
-        addLog(state, `【${def.name}】发动【巨贾】，游戏开始时多摸${jujiaCards.length}张牌`)
+        const name = getGeneralById(general.generalId)?.name ?? general.generalId
+        addLog(state, `【${name}】发动【巨贾】，游戏开始时多摸${jujiaCards.length}张牌`)
     }
 
     state.phase = GamePhase.PLAYING
@@ -158,6 +248,7 @@ export function setupPairPlay(state: GameState): void {
     state.activeGeneralIndex = 0
     state.activePlayerFaction = Faction.COOL
     state.attackUsedThisTurn = 0
+    state.generals.forEach((g) => resetSkillUses(g))
     addLog(state, '═══ 第 1 大回合开始 ═══ 1 号位先手')
     triggerShuzhiChoose(state)
     if (state.pendingResponseQueue.length === 0) runTurnStart(state)

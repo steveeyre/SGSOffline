@@ -7,7 +7,7 @@
         "dev": "vite",
         "build": "tsc -b && vite build",
         "build:standalone": "node scripts/build-standalone.mjs",
-        "check": "node scripts/run-engine-checks.mjs && node scripts/run-engine-checks.mjs src/modes/FightTheLandlord/_checks-ddz.ts && node scripts/run-engine-checks.mjs src/modes/HappyPair/_checks-pair.ts && node scripts/run-engine-checks.mjs src/engine/_review-check.ts && node scripts/run-engine-checks.mjs src/engine/_position-check.ts",
+        "check": "node scripts/run-engine-checks.mjs && node scripts/run-engine-checks.mjs src/modes/FightTheLandlord/_checks-ddz.ts && node scripts/run-engine-checks.mjs src/modes/HappyPair/_checks-pair.ts && node scripts/run-engine-checks.mjs src/modes/_checks-oddity.ts && node scripts/run-engine-checks.mjs src/modes/_checks-pointpick.ts && node scripts/run-engine-checks.mjs src/engine/_review-check.ts && node scripts/run-engine-checks.mjs src/engine/_position-check.ts && node scripts/run-engine-checks.mjs src/engine/_resume-check.ts",
         "check:selfplay": "node scripts/run-engine-checks.mjs src/engine/_selfplay.ts 20",
         "check:selfplay-pair": "node scripts/run-engine-checks.mjs src/modes/HappyPair/selfplay-pair.ts 20",
         "check:selfplay-ddz": "node scripts/run-engine-checks.mjs src/modes/FightTheLandlord/selfplay-ddz.ts 20",

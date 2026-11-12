@@ -24,7 +24,7 @@ export const CARD_TOOLTIP: Record<string, { name: string; desc: string }> = {
     overindulgence:  { name: '乐不思蜀', desc: '对一名其他角色使用。该角色判定阶段判定，非♥则跳过出牌阶段。' },
     supply_shortage: { name: '兵粮寸断', desc: '对距离1以内的一名其他角色使用。该角色判定阶段判定，♣则跳过摸牌阶段。' },
     // 武器
-    crossbow:         { name: '连弩', desc: '攻击范围1。出牌阶段使用【杀】无次数限制。' },
+    crossbow:         { name: '诸葛连弩', desc: '攻击范围1。出牌阶段使用【杀】无次数限制。' },
     double_swords:    { name: '雌雄双股剑', desc: '攻击范围2。对异性角色使用【杀】时，目标须弃一张手牌或让你摸一张牌。' },
     qinggang_sword:   { name: '青釭剑', desc: '攻击范围2。你使用【杀】时，无视目标的防具。' },
     ice_sword:        { name: '寒冰剑', desc: '攻击范围2。使用【杀】命中目标时，可不造成伤害，改为弃置目标两张牌。' },

@@ -18,17 +18,17 @@
     TurnPhase,
 } from 'sgs3v3-shared'
 import { getActiveGeneral, getAttackRange, getHandLimit } from './game-state'
-import { getGeneralById, getSkillDefById } from './generals'
+import { getGeneralById, getSkillDefById, skillMatches } from './generals'
 import { canPlayAsNegate } from './card-utils'
 import { chooseActionUnit, handleDiscard, handleEndTurn, handleYieldChoice } from './turn-manager'
 import { handleNegateRespond, handleRespond, handleUseCard, handleUseSkill, negateWindowTimeout } from './game-actions'
 import { AI_PLAYER_ID, currentPickFaction, handlePickYield, localDeployGenerals, localPickGeneral } from './local-match'
 import { randomInt } from './rng'
 import { hasRole, rolesOf, synergyWeight } from './general-meta'
-import { pickValue, positionScore, rankDeployments } from './position-score'
+import { bestDeployment, pickValue, positionScore, rankDeployments } from './position-score'
 import { expectedSlashes } from './deck-meta'
 import {
-    BASE_SCORE, PASS_SCORE, PLAN_BONUS, choosePlan, deckInfo, equipmentScore,
+    BASE_SCORE, NEGATE_THRESHOLD, PASS_SCORE, PLAN_BONUS, choosePlan, deckInfo, equipmentScore,
     estimateAction, holdPenalty, isWeak, matchTempo, negateScore, presetPriority, targetScore,
     turnValueOf, type ActionEstimate, type PlanKind,
 } from './ai-policy'
@@ -40,7 +40,7 @@ import { dodgeHoldValue, delayedSuccessChance, negateRisk, predictAoe, predictDu
 import { enemyPlans, guessHand, handDodgeChance, incomingDamage, knownSuits } from './ai-memory'
 import { beginDecision, endDecision } from './ai-audit'
 import { applyChoicePatches, applyPatchToOptions, experimentOn, forcedPlayRule, hasHookRules, noteExperiment, noteThresholdDecision, pickBestChoice, thresholdFor, type Choice } from './ai-variant'
-import { bestStealSlot, duanliangTargetLegal, isJiaozhaoSealed, jinjiuTurnsWineIntoSlash, pickBanghuaiChoice, pickDanshouChoice, pickJiangchiChoice, pickJiefanTarget, pickQingnangPlan, pickYijiReceiver, rendeOpportunity, selfTargetOnly, stealableEquipSlots } from './general-playbook'
+import { bestStealSlot, duanliangTargetLegal, isJiaozhaoSealed, jinjiuTurnsWineIntoSlash, juzhanForbiddenIndex, pickBanghuaiChoice, pickDanshouChoice, pickJiangchiChoice, pickJiefanTarget, pickQingnangPlan, pickYijiReceiver, rendeOpportunity, selfTargetOnly, stealableEquipSlots } from './general-playbook'
 
 const SLASH_NAMES: string[] = [BasicCardName.ATTACK, BasicCardName.FIRE_SLASH, BasicCardName.THUNDER_SLASH]
 
@@ -206,43 +206,44 @@ const SKILL_SCORE: Record<string, number> = {
     // 魏
     caocao_jianxiong: 14, simayi_fankui: 22, simayi_guicai: 12, zhangliao_tuxi: 18,
     guojia_tiandu: 8, guojia_yiji: 24, guojia_jie_yiji: 24, zhenji_luoshen: 20, zhenji_qingguo: 12,
-    xiahoyuan_shensu: 10, xuhuang_duanliang: 10, xiahoudun_ganglie: 16, wenpin_zhenwei: 12,
+    xiahouyuan_shensu: 10, xuhuang_jie_duanliang: 10, xiahoudun_ganglie: 16, wenpin_zhenwei: 12,
     // 蜀
     liubei_rende: 18, guanyu_wusheng: 16, guanyu_zhongyi: 8, zhangfei_paoxiao: 20,
     zhugeliang_guanxing: 18, zhugeliang_kongcheng: 16, zhaoyun_longdan: 16, zhaoyun_jiuzhu: 8,
     machao_mashu: 10, machao_tieqi: 14, huangyueying_jizhi: 12, huangyueying_qicai: 12,
     jiangwei_tiaoxin: 12, jiangwei_zhiji: 8,
     // 吴
-    sunquan_zhiheng: 22, ganning_qixi: 14, huanggai_kurou: 18, zhouyu_yingzi: 14,
+    sunquan_zhiheng: 22, sunquan_jie_zhiheng: 24, ganning_qixi: 14, huanggai_kurou: 18, zhouyu_yingzi: 14,
     zhouyu_fanjian: 14, daqiao_guose: 14, daqiao_liuli: 16, sunshangxiang_jieyin: 10,
-    sunshangxiang_xiaoji: 10, sunjian_yinghun: 12, xiaoqiao_tianxiang_luoshu: 16, xiaoqiao_hongyan: 6,
-    sunce_jiang: 10, sunce_hunzi: 6, zhugejin_mingzhe: 8, zhugejin_huanshi: 8, zhugejin_hongyuan: 8,
+    sunshangxiang_xiaoji: 10, sunjian_yinghun: 12, xiaoqiao_tianxiang: 16, xiaoqiao_hongyan: 6,
+    sunce_jiang: 10, sunce_jie_jiang: 10, sunce_hunzi: 6, sunce_jie_hunzi: 6, zhugejin_mingzhe: 8, zhugejin_huanshi: 8, zhugejin_hongyuan: 8,
+    zhugejin_jing_mingzhe: 8, zhugejin_jing_hongyuan: 10, simayi_jing_guicai: 14, simayi_jing_jiaozhao: 16, simayi_jing_cangqi: 20, xuhuang_jing_duanliang: 12,
     // 群
     huatuo_jijiu: 12, huatuo_qingnang: 14, lvbu_wushuang: 20, diaochan_lijian: 14,
     diaochan_biyue: 8, pangde_mashu: 10, pangde_mengjin: 10, pangde_jianchu: 14, jiaxu_wansha: 8,
     jiaxu_luanwu: 10, jiaxu_weimu: 10,
     // 平衡版扩展
     chengong_mingce: 14, chengong_zhichi: 12, jushou_jianying: 16, jushou_shibei: 10,
-    fuwan_moukui: 12, zhangjiao_leiji: 14, zhangjiao_guidao: 12,
-    lidian_xunxun: 16, lidian_wangxi: 10, simayi_jie_fankui: 22, simayi_jie_guicai: 14,
-    xuchu_luoyi: 16, dengai_tuntian: 18, dengai_zaoxian: 12, dengai_jixi: 12,
+    fuwan_moukui: 12, zhangjiao_leiji: 14, zhangjiao_guidao: 12, zhangjiao_jie_leiji: 16, zhangjiao_jie_guidao: 12,
+    lidian_xunxun: 16, lidian_wangxi: 10,
+    xuchu_jie_luoyi: 16, dengai_tuntian: 18, dengai_zaoxian: 12, dengai_jixi: 12,
     xunyou_qice: 20, xunyou_zhiyu: 10, wangyi_zhenlie: 12, wangyi_miji: 10,
     wangji_qizhi: 14, wangji_jinqu: 8, yuejin_xiaoguo: 12, simalang_junbing: 10,
     simalang_quji: 12, litong_tuifeng: 14, caocao_jie_jianxiong: 16, dianwei_jie_qiangxi: 16,
     machao_jie_tieqi: 16, madai_qianxi: 14, sp_sunshangxiang_liangzhu: 12,
-    sp_sunshangxiang_fanxiang: 8, zhoucang_zhongyong: 14, yanyan_juzhan: 14,
+    sp_sunshangxiang_fanxiang: 8, zhoucang_zhongyong: 14, zhoucang_jie_zhongyong: 14, yanyan_juzhan: 14,
     wangping_feijun: 14, wangping_binglue: 8, huangquan_dianhu: 14, huangquan_jianji: 12,
     sunqian_qianya: 10, sunqian_shuomeng: 8, lingtong_xuanfeng: 14, ganning_jie_fenwei: 10,
     zhouyu_jie_yingzi: 12, zhouyu_jie_fanjian: 14, luxun_jie_qianxun: 12, luxun_jie_lianying: 12,
-    guyong_shenxing: 8, guyong_bingyi: 10, dingfeng_duanbing: 14, dingfeng_fenxun: 8,
-    yufan_zongxuan: 8, yufan_zhiyan: 10, zumao_yinbing: 10, zumao_juedi: 10,
+    guyong_shenxing: 8, guyong_jie_shenxing: 8, guyong_bingyi: 10, guyong_jie_bingyi: 10, dingfeng_duanbing: 14, dingfeng_fenxun: 8,
+    yufan_zongxuan: 8, yufan_jie_zongxuan: 8, yufan_zhiyan: 10, yufan_jie_zhiyan: 10, zumao_yinbing: 10, zumao_juedi: 10,
+    jiangwan_jing_shengxi: 14, jiangwan_jing_shoucheng: 12,
     zhugeke_aocai: 10, zhugeke_duwu: 16, lingcao_dufeng: 14, caifuren_qieting: 8,
     caifuren_xianzhou: 10, lvbu_jing_zhanshen: 16, dianwei_jie_ninge: 14,
     xiahoudun_jing_ganglie: 16, lvbu_jing_mashu: 10, lvbu_jing_shenji: 16,
     // 洛书版扩展（三）：界将升级
-    sunshangxiang_jieyuan: 14, sunshangxiang_jie_xiaoji: 14, daqiao_jie_guose: 16,
+    sunshangxiang_jie_jieyin: 14, sunshangxiang_jie_xiaoji: 14, daqiao_jie_guose: 16,
     chengpu_jie_lihuo: 16, chengpu_chunlao: 10, caifuren_jie_qieting: 12,
-    simayi_jie_jiaozhao: 16, guohuanghou_danxin: 10, caoxiu_jie_qingxi: 16,
     caoxiu_qianju: 10, wangyi_jie_zhenlie: 16, taishici_hanzhan: 12,
     // 洛书版扩展（四）：新增武将
     guohuai_jingce: 16, sunxiu_yanzhu: 12, sunxiu_xingxue: 14,
@@ -255,10 +256,15 @@ const SKILL_SCORE: Record<string, number> = {
     zhonghui_quanji: 14, zhonghui_zili: 16, zhonghui_paiyi: 16,
     zhangchunhua_jueqing: 16, zhangchunhua_shangshi: 14, zhangchunhua_jianmie: 14,
     caozhang_jiangchi: 14, zhangsong_qiangshi: 12, zhangsong_xiantu: 12,
-    fuhuanghou_chuikong: 14, fuhuanghou_xuanqiu: 12, zhuran_danshou: 16,
+    fuhuanghou_zhuikong: 14, fuhuanghou_xuanqiu: 12, zhuran_danshou: 16,
     caochong_chengxiang: 18, caochong_renxin: 14, mizhu_ziyuan: 14, mizhu_jujia: 16,
     caorui_huituo: 18, caorui_mingjian: 14, liufeng_xiansi: 14, zhanghe_qiaobian: 16,
-    xuezong_funan: 14, xuezong_jiexun: 12,
+    xuezong_funan: 14, xuezong_jiexun: 12, jiangqin_shangyi: 12,
+    jiangqin_jianyi: 10,
+    // 洛书版扩展（十）
+    qiaozhou_zhiming: 14, qiaozhou_xingbu: 16,
+    liuyan_tushe: 18, liuyan_limu: 16,
+    lvbu_jie_liyu: 18,
 }
 
 /** 前锋位额外权重：偏向输出与压制能力 */
@@ -266,14 +272,14 @@ const FLANK_SKILL_SCORE: Record<string, number> = {
     zhangfei_paoxiao: 14, lvbu_wushuang: 14, machao_tieqi: 10, pangde_mengjin: 8, pangde_jianchu: 10,
     guanyu_wusheng: 10, zhaoyun_longdan: 10, huanggai_kurou: 10, sunquan_zhiheng: 10,
     zhouyu_fanjian: 10, diaochan_lijian: 10, jiangwei_tiaoxin: 8, ganning_qixi: 8,
-    daqiao_guose: 8, jiaxu_luanwu: 8, xuhuang_duanliang: 6, guojia_yiji: 6, guojia_jie_yiji: 6,
+    daqiao_guose: 8, jiaxu_luanwu: 8, xuhuang_jie_duanliang: 6, guojia_yiji: 6, guojia_jie_yiji: 6,
     huatuo_qingnang: 6, sunshangxiang_jieyin: 6,
     dianwei_jie_qiangxi: 8, zhugeke_duwu: 8, lingcao_dufeng: 8, madai_qianxi: 6,
-    xunyou_qice: 6, wangping_feijun: 6, dingfeng_duanbing: 8, xuchu_luoyi: 8,
+    xunyou_qice: 6, wangping_feijun: 6, dingfeng_duanbing: 8, xuchu_jie_luoyi: 8,
     machao_jie_tieqi: 8,
     // 洛书版扩展（三）：界将升级（前锋位加成）
     zhangfei_tishen: 8, caoxiu_jie_qingxi: 8, chengpu_jie_lihuo: 8,
-    taishici_hanzhan: 6, sunshangxiang_jieyuan: 6,
+    taishici_hanzhan: 6, sunshangxiang_jie_jieyin: 6,
 }
 
 /**
@@ -285,13 +291,16 @@ const GENERAL_TIER_SCORE: Record<string, number> = {
     huangyueying: 16, huanggai: 14, zhugeliang: 8, simayi: 8, sunquan: 5,
     zhangfei: 6, lvbu: 5, machao: 4, zhaoyun_jing: 4, guanyu: 4, zhouyu: 4,
     daqiao: 4, ganning: 4, diaochan: 3, pangde: 3, xiahoudun: 3, caocao: 3,
-    xiaoqiao: 2, sunshangxiang: 2, zhenji: 2, sunjian: 2, xuhuang: 2,
-    zhugejin: 1, jiaxu: 1, jiangwei: 1, wenpin: 0, xiahoyuan: 0, sunce: 0,
+    xiaoqiao: 2, sunshangxiang: 2, zhenji: 2, sunjian: 2, xuhuang_jing: 2,
+    sunquan_jie: 6, zhangjiao_jie: 6,
+    zhugejin: 1, jiaxu: 1, jiangwei: 1, wenpin: 0, xiahouyuan: 0, sunce: 0,
+    jiangwei_jie: 7, wenpin_jing: 3,
     // 平衡版扩展（自用，权重为体验向估计）
-    simayi_jie: 6, xuchu_jie: 4, lidian_jie: 5, dengai: 6, xunyou: 6, wangyi: 3,
+    simayi_jing: 6, xuchu_jie: 4, lidian_jie: 5, dengai: 6, xunyou: 6, wangyi: 3,
     wangji: 4, yuejin: 2, simalang: 4, litong: 3, caocao_jie: 3, dianwei_jie: 4,
     machao_jie: 4, madai: 4, sunshangxiang_sp: 3, zhoucang: 3, yanyan: 3,
     wangping: 4, huangquan_jing: 3, sunqian: 3, lingtong: 4, ganning_jie: 3,
+    sunqian_jie: 4,
     zhouyu_jie: 5, luxun_jie: 5, guyong: 4, dingfeng: 5, yufan: 3, zumao: 3,
     zhugeke: 5, lingcao: 4, caifuren: 3, lvbu_jing: 4, chengong: 5, jushou: 4,
     fuwan: 3, zhangjiao: 4, xiahoudun_jing: 4,
@@ -317,6 +326,10 @@ const GENERAL_TIER_SCORE: Record<string, number> = {
     zhonghui_jie: 6, zhangchunhua_jie: 5, caozhang_jie: 5, zhangsong_jie: 5,
     fuhuanghou_jie: 5, zhuran_jie: 6, caochong_jie: 6, mizhu: 5, caorui: 6,
     liufeng: 5, zhanghe: 6, xuezong: 6,
+    // 洛书版扩展（十）
+    qiaozhou: 5, liuyan: 6, lvbu_jie: 5,
+    // 新增吴景
+    wujing: 6,
 }
 
 /** 主帅位适配度：支援型（郭嘉/华佗/刘备）与压制型（甘宁/大乔/周瑜/孙权/黄盖）优先，张辽/文聘不适合主帅 */
@@ -325,11 +338,12 @@ const COMMANDER_FIT: Record<string, number> = {
     ganning: 16, sunquan: 16, daqiao: 14, zhouyu: 14, huanggai: 12,
     simayi: 10, zhugeliang: 8, caocao: 8, xiahoudun: 8, xiaoqiao: 6, sunjian: 6,
     zhangfei: 4, lvbu: 4, machao: 4, guanyu: 4, zhaoyun_jing: 4,
-    pangde: 2, zhenji: 2, diaochan: 2, xuhuang: 2, jiaxu: 2,
-    zhangliao: -30, wenpin: -14, xiahoyuan: -6, sunce: -4,
+    pangde: 2, zhenji: 2, diaochan: 2, xuhuang_jing: 2, jiaxu: 2,
+    zhangliao: -30, wenpin: -14, xiahouyuan: -6, sunce: -4,
+    wenpin_jing: -14, jiangwei_jie: 2, sunqian_jie: 5,
     guyong: 10, simalang: 6, sunqian: 4, dengai: 6, jushou: 4, huangquan_jing: 4,
     wangping: 4, zhouyu_jie: 8, zhugeke: 6, caifuren: 2, lingtong: 4, yanyan: 4,
-    zhoucang: 4, dingfeng: 4, xunyou: 6, lidian_jie: 4, simayi_jie: 6, wangji: 6,
+    zhoucang: 4, dingfeng: 4, xunyou: 6, lidian_jie: 4, simayi_jing: 6, wangji: 6,
     xiahoudun_jing: 8,
     guojia_jie: 22, wolong: 14, lusu: 12, xunyu: 12, chenqun: 8, kuailiangkuaiyue: 8,
     sunjian_jie: 8, zhoufei: 6, bulianshi_jie: 6, caoren: 6, zhangzhaozhanghong_jie: 6,
@@ -355,20 +369,36 @@ function denialBonus(generalId: string, rivalPicked: GeneralDefinition[]): numbe
     return Math.min(10, Math.round(best * 1.2))
 }
 
-/** 阵容缺口：首抓只看强度，之后先补输出、再补辅助/盾将；同定位堆叠边际收益递减 */
+/**
+ * 阵容缺口：主帅（辅助/盾）一席、边锋（输出/核心）两席，
+ * 缺哪个位置就补哪个位置，凑齐后同定位继续堆叠边际收益递减。
+ */
 function compositionBonus(generalId: string, myPicked: GeneralDefinition[]): number {
     if (myPicked.length === 0) return 0
-    const owned = new Set(myPicked.flatMap((g) => rolesOf(g.id)))
-    const needDamage = !owned.has('damage') && !owned.has('core')
-    const needSupport = !owned.has('support') && !owned.has('tank')
+    const owned = myPicked.map((g) => rolesOf(g.id))
+    const damageCount = owned.filter((roles) => roles.includes('damage') || roles.includes('core')).length
+    const supportCount = owned.filter((roles) => roles.includes('support') || roles.includes('tank')).length
     const canDamage = hasRole(generalId, 'damage') || hasRole(generalId, 'core')
     const canSupport = hasRole(generalId, 'support') || hasRole(generalId, 'tank')
-    const bonus = Math.max(needDamage && canDamage ? 14 : 0, needSupport && canSupport ? 14 : 0)
-    const overlap = rolesOf(generalId).filter((role) => owned.has(role)).length
+    const bonus = Math.max(damageCount < 2 && canDamage ? 14 : 0, supportCount < 1 && canSupport ? 14 : 0)
+    const overlap = rolesOf(generalId).filter((role) => owned.some((roles) => roles.includes(role))).length
     return bonus - overlap * 3
 }
 
-export type DraftScore = { base: number; synergy: number; denial: number; composition: number; position: number; total: number }
+const DRAFT_POSITIONS = ['commander', 'flankA', 'flankB'] as const
+
+/**
+ * 克制：候选人在对位修正（双方能力向量）下最好的一席。
+ * 压制敌方输出、又扛得住敌方伤害的武将得正分，被敌方克制得负分。
+ */
+function counterBonus(def: GeneralDefinition, rivalPicked: GeneralDefinition[], faction: Faction): number {
+    if (rivalPicked.length === 0) return 0
+    const best = Math.max(...DRAFT_POSITIONS.map((position) =>
+        positionScore(def, position, { faction, rival: rivalPicked }).matchup))
+    return best * 1.5
+}
+
+export type DraftScore = { base: number; synergy: number; denial: number; composition: number; counter: number; position: number; total: number }
 
 /** 抓将评分拆解：base 看武将本身，position 看加入后的最佳三人部署提升，其余看局势 */
 export function draftScore(
@@ -381,14 +411,19 @@ export function draftScore(
     const synergy = synergyBonus(def.id, myPicked)
     const denial = denialBonus(def.id, rivalPicked)
     const composition = compositionBonus(def.id, myPicked)
+    const faction = ctx?.faction ?? Faction.COOL
+    const counter = counterBonus(def, rivalPicked, faction)
     const position = pickValue(def, {
-        faction: ctx?.faction ?? Faction.COOL,
+        faction,
         pickStep: ctx?.pickStep ?? 0,
         team: myPicked,
         rival: rivalPicked,
     }).deployGain
     // 位置项只做同强度下的排序修正；系数压到 0.5，避免位置先验盖过抢人与武将强度
-    return { base, synergy, denial, composition, position, total: base + synergy + denial + composition + position * 0.5 }
+    return {
+        base, synergy, denial, composition, counter, position,
+        total: base + synergy + denial + composition + counter + position * 0.5,
+    }
 }
 
 /** 武将综合评分：抓将梯度 + 体力 + 技能数量/类型 + 强技能权重 */
@@ -553,6 +588,13 @@ function pickZhenshanPartner(state: GameState, selfIdx: number, playerId: string
     return candidates[0]?.i
 }
 
+/** 卫境（鲁芝）：每轮限一次的视为【杀】/【闪】是否仍可用 */
+function canWeijing(g: GeneralView | undefined, state: GameState): boolean {
+    if (!g?.alive || !knowsSkill(g, 'luzhi_weijing')) return false
+    const roundNo = state.roundSerial ?? 0
+    return g.weijingRound === undefined || g.weijingRound !== roundNo
+}
+
 const EQUIP_SLOTS = [EquipSlot.WEAPON, EquipSlot.ARMOR, EquipSlot.PLUS_HORSE, EquipSlot.MINUS_HORSE] as const
 
 type GeneralView = GameState['generals'][number]
@@ -634,6 +676,11 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 && !(ctx as any).aocaiTried) {
                 payload.action = 'aocai'
             }
+            // 卫境（鲁芝）：每轮限一次的免费【闪】，优于需要交换手牌的赈赡
+            if (canWeijing(state.generals[targetIndex], state)) {
+                payload.action = 'weijing_dodge'
+                break
+            }
             // 赈赡（界全琮）：无【闪】时交换手牌视为使用【闪】
             const zsDodgePartner = pickZhenshanPartner(state, targetIndex, playerId)
             if (zsDodgePartner !== undefined) {
@@ -648,7 +695,9 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
         case ResponseType.ARROWS_RESPONSE: {
             const cardId = pickSlash(state, targetIndex)
             if (cardId) payload.cardId = cardId
-            else {
+            else if (canWeijing(state.generals[targetIndex], state)) {
+                payload.action = 'weijing_slash'
+            } else {
                 const zsSlashPartner = pickZhenshanPartner(state, targetIndex, playerId)
                 if (zsSlashPartner !== undefined) {
                     payload.action = 'zhenshan'
@@ -746,11 +795,24 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 break
             }
 
+            // 掠城（张曼成）：目标可对敌方张曼成依次使用手中的【杀】
+            if (skillId === 'zhangmancheng_luecheng_end') {
+                const lcSrc = state.generals[(ctx.luechengSourceIndex as number) ?? -1]
+                if (lcSrc?.alive && isEnemy(state, lcSrc, playerId)) payload.action = 'confirm'
+                break
+            }
+            // 叛侵（SP孟获）：弃牌数不大于目标数时还能执行蛮王最后一项，有牌就发动
+            if (skillId === 'menghuo_sp_panqin') {
+                if (((ctx.panqinCount as number) ?? 0) > 0) payload.action = 'confirm'
+                break
+            }
+
             // 洛书版扩展（二）：无额外代价、只有收益的时机技直接确认
             const aiAutoConfirm = new Set([
-                'xunyu_jieming', 'chenqun_faen', 'caoren_jiewei_front', 'xiahouyuan_shebian',
+                'xunyu_jieming', 'xunyu_jieming_draw', 'chenqun_faen', 'caoren_jiewei_front', 'xiahouyuan_shebian',
+                'wujing_heji',
                 'xunyu_quhu', 'taishici_tianyi', 'gaoshun_xianzhen', 'zhurong_lierend',
-                'sunjian_wulie', 'bulianshi_zhuiyi', 'zhoufang_youdi', 'yanliang_shuangxiong',
+                'bulianshi_zhuiyi', 'zhoufang_youdi', 'yanliang_shuangxiong',
                 'lusu_haoshi', 'zhoufei_kongsheng', 'caoren_jushou', 'guanyinping_wuji',
                 'xiahoudun_qingjian', 'kuailiang_jiandjiang', 'zhangzhao_guzheng',
                 'zhoufei_liangyin_out', 'zhoufei_liangyin_in',
@@ -763,6 +825,19 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             ])
             if (aiAutoConfirm.has(skillId)) {
                 payload.action = 'confirm'
+                break
+            }
+            // 图射（刘焉）/ 星卜（谯周）：无额外代价的纯收益
+            if (skillId === 'liuyan_tushe' || skillId === 'qiaozhou_xingbu') {
+                payload.action = 'confirm'
+                break
+            }
+            // 利驭（界吕布）：目标有非装备牌时拿牌不触发决斗；只有装备牌时不值得冒险
+            if (skillId === 'lvbu_jie_liyu') {
+                const liyuVictim = state.generals[(ctx.liyuTargetIndex as number) ?? -1]
+                const safe = !!liyuVictim && (liyuVictim.judgeZone.length > 0
+                    || liyuVictim.hand.some(c => c.category !== CardCategory.EQUIPMENT))
+                if (safe) payload.action = 'confirm'
                 break
             }
             if (skillId === 'shenlusu_zhimeng') {
@@ -783,7 +858,7 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             // 洛书版扩展（七）：新增武将的发动决策
             if (skillId === 'hanhaosihuan_shenduan' || skillId === 'shanzhaoyun_zhendan_draw'
                 || skillId === 'caoang_kangkai' || skillId === 'caoang_kangkai_use'
-                || skillId === 'simayi_jie_upgrade') {
+                || skillId === 'simayi_jie_upgrade' || skillId === 'zhangjiao_jie_leiji') {
                 payload.action = 'confirm'
                 break
             }
@@ -882,8 +957,8 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                     payload.action = 'confirm'
                     break
                 }
-                case 'xiahoyuan_shensu_1':
-                case 'xiahoyuan_shensu_2': {
+                case 'xiahouyuan_shensu_1':
+                case 'xiahouyuan_shensu_2': {
                     // 神速：判定成功即可视为出杀/弃牌，牌堆还有牌就发动
                     if (state.deck.length > 0) payload.action = 'confirm'
                     break
@@ -900,8 +975,18 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                     payload.action = 'confirm'
                     break
                 }
+                case 'zhugejin_jing_hongyuan':
+                case 'zhugejin_jing_mingzhe': {
+                    payload.action = 'confirm'
+                    break
+                }
+                case 'zhugejin_jing_hongyuan':
+                case 'zhugejin_jing_mingzhe': {
+                    payload.action = 'confirm'
+                    break
+                }
                 case 'zhugejin_hongyuan': {
-                    const hyCandidates = (ctx.candidateIndices as number[]) ?? []
+                    const hyCandidates = (ctx.hongyuanCandidates as number[]) ?? []
                     if (hyCandidates.some((idx) => state.generals[idx]?.alive)) payload.action = 'confirm'
                     break
                 }
@@ -1000,6 +1085,151 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                     if (state.deck.length > 0) payload.action = 'confirm'
                     break
                 }
+                case 'yujin_mou_xiayuan': {
+                    // 狭援：弃两张手牌补回队友护甲，只在目标是友方时值得
+                    const xyTarget = state.generals[ctx.xiayuanTargetIndex as number]
+                    if (xyTarget && !isEnemy(state, xyTarget, playerId)) payload.action = 'confirm'
+                    break
+                }
+                case 'yujin_mou_jieyue': {
+                    // 节钺：结束阶段白送队友1点护甲并可能收回一张牌
+                    payload.action = 'confirm'
+                    break
+                }
+                case 'caiwenji_jie_beige': {
+                    // 悲歌：有牌就发，判定花色不论正反都有收益
+                    if (self && (self.hand.length > 0 || equippedCards(self).length > 0)) {
+                        payload.action = 'confirm'
+                    }
+                    break
+                }
+                case 'zhoutai_fenji': {
+                    // 奋激：1点体力换队友两张牌
+                    if (self && self.hp > 1) payload.action = 'confirm'
+                    break
+                }
+                case 'xushu_zhuhai': {
+                    // 诛害：只对敌方补刀
+                    const zhTarget = state.generals[ctx.zhuhaiTargetIndex as number]
+                    if (zhTarget?.alive && isEnemy(state, zhTarget, playerId)) payload.action = 'confirm'
+                    break
+                }
+                case 'guanping_longyin': {
+                    // 龙吟：弃一张牌换回出杀次数，红色还能摸一张
+                    if (self && (self.hand.length > 0 || equippedCards(self).length > 0)) {
+                        payload.action = 'confirm'
+                    }
+                    break
+                }
+                case 'dongcheng_chengzhao': {
+                    payload.action = 'confirm'
+                    break
+                }
+                case 'jiangwei_mou_ranji': {
+                    // 燃己：优先拿【诈降】的摸牌收益，两选项都能选时也偏向诈降
+                    const rjOptions = (ctx.options as { action: string }[] | undefined) ?? []
+                    const rjPick = rjOptions.find((o) => o.action === 'zhaoxiang') ?? rjOptions[0]
+                    if (rjPick) payload.action = rjPick.action
+                    break
+                }
+                case 'jiangwei_mou_ranji_adjust': {
+                    // 燃己：缺血补血，否则补手牌
+                    payload.action = self && self.hp <= self.maxHp - 2 ? 'hp' : 'hand'
+                    break
+                }
+                case 'jiangwei_mou_kunfen': {
+                    // 困奋：1点体力换两张牌，受伤前才发动
+                    if (self && self.hp > 1) payload.action = 'loseHp'
+                    break
+                }
+                case 'huban_huiyun': {
+                    // 晖云：优先让目标摸牌，其次手牌选项，最后展示牌重铸
+                    const hyOptions = ((ctx.options as { action: string }[] | undefined) ?? [])
+                        .map((o) => o.action)
+                    payload.action = hyOptions.includes('draw') ? 'draw'
+                        : hyOptions.includes('hand') ? 'hand'
+                            : hyOptions[0]
+                    break
+                }
+                case 'xushao_pingjian': {
+                    // 评荐：随机三个技能，优先选已经实现且纯被动收益的
+                    const pjOptions = ((ctx.options as { action: string }[] | undefined) ?? [])
+                        .map((o) => o.action)
+                    const pjWanted = ['caocao_jianxiong', 'guojia_yiji', 'simayi_fankui',
+                        'sunce_jiang', 'sunce_jie_jiang', 'machao_tieqi', 'zhangfei_paoxiao']
+                    payload.action = pjOptions.find((a) => pjWanted.includes(a)) ?? pjOptions[0]
+                    break
+                }
+                case 'lvmeng_jie_botu': {
+                    // 博图：额外回合是纯收益，有次数就直接发动
+                    payload.action = 'confirm'
+                    break
+                }
+                case 'caomao_juetao': {
+                    // 决讨：体力为1时依次使用牌堆底的牌，选体力最低的敌方为目标
+                    const jtCandidates = (ctx.juetaoCandidates as number[]) ?? []
+                    const jtEnemies = jtCandidates.filter((idx) =>
+                        state.generals[idx]?.alive && isEnemy(state, state.generals[idx], playerId))
+                    const jtPool = jtEnemies.length > 0 ? jtEnemies : jtCandidates
+                    if (jtPool.length === 0) break
+                    payload.action = 'confirm'
+                    payload.targetIndex = [...jtPool]
+                        .sort((a, b) => state.generals[a].hp - state.generals[b].hp)[0]
+                    break
+                }
+                case 'caiwenji_jie_duanchang': {
+                    // 断肠：被迫失去一个技能，优先失去列表最后（通常是最不关键的）
+                    const dcOptions = (ctx.options as { action: string }[] | undefined) ?? []
+                    if (dcOptions.length > 0) payload.action = dcOptions[dcOptions.length - 1].action
+                    break
+                }
+                case 'pangtong_sp_songsang': {
+                    // 送丧：限定技，回复体力/加上限并获得展骥，纯收益
+                    payload.action = 'confirm'
+                    break
+                }
+                case 'pangtong_sp_guolun_swap': {
+                    // 过论：用最不值钱的牌交换，净赚对方一张牌
+                    const glMine = self
+                        ? [...self.hand].sort((a, b) => keepValue(a) - keepValue(b))[0]
+                        : undefined
+                    if (glMine) {
+                        payload.action = 'confirm'
+                        payload.cardId = glMine.id
+                    }
+                    break
+                }
+                case 'lusu_jie_haoshi_guard': {
+                    // 好施（界鲁肃）：把一张牌交给己方鲁肃，团队内部转移，直接交
+                    const hgOwner = state.generals[ctx.haoshiGuardOwnerIndex as number]
+                    if (hgOwner && !isEnemy(state, hgOwner, playerId)) payload.action = 'confirm'
+                    break
+                }
+                case 'feiyi_hezhong': {
+                    // 和衷（费祎）：展示并摸一张，纯赚
+                    payload.action = 'confirm'
+                    break
+                }
+                case 'liyan_duliang_choice': {
+                    // 督粮（李严）：牌堆还有牌就翻牌堆顶（基本牌交给目标），否则让其多摸一张
+                    payload.action = state.deck.length >= 2 ? 'peek' : 'draw'
+                    break
+                }
+                case 'feiyi_hezhong_mode': {
+                    // 和衷（费祎）：挑手里普通锦囊更容易对上的方向，都没有就不选
+                    const hzShown = (ctx.hezhongShown as number) ?? 0
+                    const hzTricks = self ? self.hand.filter((c) => c.category === CardCategory.TRICK) : []
+                    const hzOptions = ((ctx.options as { action: string }[] | undefined) ?? [])
+                        .map((o) => o.action)
+                    if (hzOptions.includes('greater') && hzTricks.some((c) => c.value > hzShown)) {
+                        payload.action = 'greater'
+                    } else if (hzOptions.includes('less') && hzTricks.some((c) => c.value < hzShown)) {
+                        payload.action = 'less'
+                    } else {
+                        payload.action = 'skip'
+                    }
+                    break
+                }
                 case 'yuejin_xiaoguo': {
                     if (self && self.hand.length > 0) payload.action = 'confirm'
                     break
@@ -1033,7 +1263,7 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                     }
                     break
                 }
-                case 'xiaoqiao_tianxiang_luoshu': {
+                case 'xiaoqiao_tianxiang': {
                     // 天香：弃♥牌把伤害转给敌方（红颜使♠也可弃）
                     if (!self) break
                     const isHeartLike = (c: Card) =>
@@ -1136,7 +1366,7 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                     }
                     break
                 }
-                case 'xuchu_luoyi': {
+                case 'xuchu_jie_luoyi': {
                     // 裸衣：亮三张换基本牌/武器/【决斗】，手里有杀或牌太少时都值得
                     const luoyiSelf = state.generals[targetIndex]
                     if (luoyiSelf && (luoyiSelf.hand.some(c => isSlash(c) || c.name === TrickCardName.DUEL) ||
@@ -1273,7 +1503,7 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                     }
                     break
                 }
-                case 'fuhuanghou_chuikong': {
+                case 'fuhuanghou_zhuikong': {
                     // 惴恐：赢则封锁对方本回合的目标；输则给一张牌并挨一刀
                     const ckFoe = state.generals[ctx.chuikongOpponentIndex as number]
                     const ckCards = self?.hand ?? []
@@ -1374,7 +1604,8 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             const suit = ctx.fanjianSuit as CardSuit
             const sameSuit = self?.hand.filter(c => c.suit === suit).length ?? 0
             if (!self) break
-            payload.action = sameSuit <= 2 || self.hp <= 2 ? 'discard' : 'loseHp'
+            payload.action = sameSuit < 2 ? 'loseHp'
+                : (sameSuit <= 2 || self.hp <= 2 ? 'discard' : 'loseHp')
             break
         }
         case ResponseType.SKILL_QIANXI_PICK: {
@@ -1481,6 +1712,17 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
         case ResponseType.SKILL_CHOOSE_TARGET: {
             const skillId = ctx.skillId as string
             const candidates = (ctx.candidateIndices as number[]) ?? []
+            // 素俭（邓芝）：逐张交给手牌最少的队友
+            if (skillId === 'dengzhi_sujian_give') {
+                const allies = candidates
+                    .map(i => ({ i, g: state.generals[i] }))
+                    .filter(({ g }) => g?.alive && !isEnemy(state, g, playerId))
+                    .sort((a, b) => a.g.hand.length - b.g.hand.length)
+                const sjPick = allies[0]?.i ?? candidates[0]
+                if (sjPick !== undefined) payload.targetIndex = sjPick
+                else payload.action = 'decline'
+                break
+            }
             if (skillId === 'dongyun_sheyan') {
                 // 舍宴：让使用者的同阵营角色也吃到这张锦囊（若是自己人则放弃）
                 const casterIdx = ctx.sheyanCasterIndex as number | undefined
@@ -1492,6 +1734,39 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                     })
                     : []
                 if (casterSide.length > 0) payload.targetIndex = casterSide[0]
+                else payload.action = 'decline'
+                break
+            }
+            // 洛书版扩展（十）
+            if (skillId === 'qiaozhou_xingbu_target') {
+                const mode = ctx.xingbuMode as 'three' | 'two' | 'low'
+                const pool = candidates
+                    .map((i) => ({ i, g: state.generals[i] }))
+                    .filter(({ g }) => g?.alive)
+                const allies = pool.filter(({ g }) => !isEnemy(state, g, playerId))
+                const foes = pool.filter(({ g }) => isEnemy(state, g, playerId))
+                if (mode === 'low') {
+                    if (foes.length > 0) payload.targetIndex = foes[0].i
+                    else if (pool.length > 0) payload.targetIndex = pool[0].i
+                    else payload.action = 'decline'
+                } else {
+                    const pick = (allies.length > 0 ? allies : pool)
+                        .sort((a, b) => b.g.hand.length - a.g.hand.length)[0]
+                    if (pick) payload.targetIndex = pick.i
+                    else payload.action = 'decline'
+                }
+                break
+            }
+            // 利驭（界吕布）：由受伤者指定另一名角色；优先选吕布的队友与其决斗
+            if (skillId === 'lvbu_jie_liyu_duel') {
+                const pool = candidates
+                    .map((i) => ({ i, g: state.generals[i] }))
+                    .filter(({ g }) => g?.alive)
+                const foesOfMine = pool.filter(({ g }) => isEnemy(state, g, playerId))
+                const nonFoes = pool.filter(({ g }) => !isEnemy(state, g, playerId))
+                const pick = (nonFoes.length > 0 ? nonFoes : foesOfMine)
+                    .sort((a, b) => b.g.hand.length - a.g.hand.length)[0]
+                if (pick) payload.targetIndex = pick.i
                 else payload.action = 'decline'
                 break
             }
@@ -1672,15 +1947,32 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 if (best >= 0) payload.targetIndex = best
                 break
             }
+            if (skillId === 'liubei_jie_rende_slash') {
+                const foes = candidates
+                    .map((idx) => ({ idx, g: state.generals[idx] }))
+                    .filter(({ g }) => g?.alive && isEnemy(state, g, playerId))
+                    .sort((a, b) => a.g.hp - b.g.hp)
+                const pick = foes[0]?.idx ?? candidates[0]
+                if (pick !== undefined) payload.targetIndex = pick
+                break
+            }
+            if (skillId === 'zhugejin_jing_hongyuan') {
+                const allies = candidates.filter((idx) => {
+                    const g = state.generals[idx]
+                    return g?.alive && !isEnemy(state, g, playerId)
+                })
+                payload.targetIndices = (allies.length > 0 ? allies : candidates).slice(0, 2)
+                break
+            }
             if (skillId === 'zhugejin_hongyuan') {
                 const allies = candidates.filter((idx) => {
                     const g = state.generals[idx]
                     return g?.alive && !isEnemy(state, g, playerId)
                 })
-                if (allies.length > 0) payload.targetIndices = allies.slice(0, 2)
+                payload.targetIndices = (allies.length > 0 ? allies : candidates).slice(0, 2)
                 break
             }
-            if (skillId === 'guyong_bingyi') {
+            if (skillId === 'guyong_bingyi' || skillId === 'guyong_jie_bingyi') {
                 const max = Math.max(1, (ctx.maxPicks as number) ?? 1)
                 const friends = candidates.filter((idx) => {
                     const g = state.generals[idx]
@@ -1689,7 +1981,7 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 payload.targetIndices = friends.slice(0, max)
                 break
             }
-            if (skillId === 'yufan_zhiyan') {
+            if (skillId === 'yufan_zhiyan' || skillId === 'yufan_jie_zhiyan') {
                 const friends = candidates
                     .map((idx) => state.generals[idx])
                     .filter((g) => g?.alive && !isEnemy(state, g, playerId))
@@ -1706,7 +1998,7 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 if (friend) payload.targetIndex = state.generals.indexOf(friend)
                 break
             }
-            if (skillId === 'sunchen_lulian') {
+            if (skillId === 'sunchen_shi_lulian') {
                 // 戮连：优先烧血最少的敌人，没有敌人时只能打自己人
                 const foe = candidates
                     .map((i) => ({ i, g: state.generals[i] }))
@@ -1718,6 +2010,17 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             if (skillId === 'zhongyao_zuoding') {
                 const ally = candidates.find((idx) => state.generals[idx] && !isEnemy(state, state.generals[idx], playerId))
                 if (ally !== undefined) payload.targetIndex = ally
+                break
+            }
+            if (skillId === 'sunjian_wulie') {
+                // 烈是挡下一次伤害的护符，只值得给自己人；没有队友就不浪费限定技
+                const wlMax = Math.max(1, (ctx.maxTargets as number) ?? 1)
+                const mates = candidates.filter((idx) => {
+                    const g = state.generals[idx]
+                    return g?.alive && !isEnemy(state, g, playerId)
+                })
+                payload.targetIndices = mates.slice(0, wlMax)
+                if (payload.targetIndices.length === 0) payload.action = 'decline'
                 break
             }
             if (skillId === 'luji_yili') {
@@ -1962,7 +2265,7 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             const self = state.generals[targetIndex]
             const need = Math.max(1, (ctx.count as number) ?? 0)
             // 逆固（孙綝）：手牌紧张时不交，让对手伤害+1
-            if ((ctx.skillId as string) === 'sunchen_nigu_give' && (self?.hand.length ?? 0) <= 2) {
+            if ((ctx.skillId as string) === 'sunchen_shi_nigu_give' && (self?.hand.length ?? 0) <= 2) {
                 payload.action = 'decline'
                 break
             }
@@ -1988,6 +2291,34 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 ? self.hand.filter((c) => candidates.includes(c.id))
                 : self.hand
             const pickCount = (ctx.count as number) ?? 1
+            if (skillId_pick === 'jiangwan_jing_shengxi') {
+                const victim = state.generals[(ctx.shengxiTargetIndex as number) ?? -1]
+                if (!victim) break
+                const victimCards = [
+                    ...victim.hand,
+                    ...Object.values(victim.equip).filter((c): c is Card => !!c),
+                ].filter(c => candidates.includes(c.id))
+                payload.cardIds = lowestValueCards(victimCards, Math.max(1, pickCount))
+                break
+            }
+            if (skillId_pick === 'qiaozhou_zhiming_top') {
+                // 知命：把最没用的手牌置于牌堆顶
+                payload.cardIds = lowestValueCards(pool, 1)
+                break
+            }
+            if (skillId_pick === 'qiaozhou_xingbu_discard') {
+                // 星卜：弃置最没用的手牌
+                payload.cardIds = lowestValueCards(pool, 1)
+                break
+            }
+            if (skillId_pick === 'pindian_pick') {
+                // 拼点：点数决定胜负，手牌价值决定代价，按“点数×6 − 保留价值×0.8”取期望最高者
+                const pindianBest = [...pool].sort((a, b) =>
+                    (b.value * 6 - keepValue(b) * 0.8) - (a.value * 6 - keepValue(a) * 0.8))[0]
+                if (pindianBest) payload.cardIds = [pindianBest.id]
+                else payload.action = 'decline'
+                break
+            }
             if (skillId_pick === 'doudizhu_feiyang') {
                 // 飞扬：弃两张最没用的手牌
                 payload.cardIds = lowestValueCards(pool, Math.min(2, pool.length))
@@ -2001,6 +2332,24 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             if (skillId_pick === 'lusu_haoshi_give') {
                 // 好施：须交出固定张数的牌，挑最没用的给
                 payload.cardIds = lowestValueCards(pool, Math.min(pool.length, Math.max(1, pickCount)))
+                break
+            }
+            if (skillId_pick === 'pangtong_sp_guolun') {
+                // 过论：出点数最小的牌，交换前点数小的一方摸一张
+                const glPick = [...pool].sort((a, b) => a.value - b.value)[0]
+                if (glPick) payload.cardIds = [glPick.id]
+                else payload.action = 'decline'
+                break
+            }
+            if (skillId_pick === 'feiyi_yanru_discard') {
+                // 晏如：只需弃到下限，挑最没用的
+                const yanruMin = Math.max(1, (ctx.yanruMin as number) ?? 1)
+                payload.cardIds = lowestValueCards(pool, Math.min(pool.length, yanruMin))
+                break
+            }
+            if (skillId_pick === 'wujing_heji') {
+                // 合击：使用一张【杀】或【决斗】，挑价值最低的那张
+                payload.cardIds = lowestValueCards(pool, 1)
                 break
             }
             if (skillId_pick === 'xunyu_jieming') {
@@ -2151,7 +2500,7 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 else payload.action = 'decline'
                 break
             }
-            if (skillId_pick === 'yufan_zongxuan') {
+            if (skillId_pick === 'yufan_zongxuan' || skillId_pick === 'yufan_jie_zongxuan') {
                 // 纵玄：置回牌堆顶的牌随后由自己摸到，优先放回价值最高的
                 const zxCards = state.discard.filter((c) => candidates.includes(c.id))
                 payload.cardIds = [...zxCards]
@@ -2164,7 +2513,11 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             if (ids.length > 0) {
                 payload.cardIds = ids
             } else {
-                const equip = equippedCards(self)[0]
+                // 候选牌在询问入队与响应之间可能已被用掉（骁果的候选是基本牌快照，
+                // 换过牌就空了）。装备区不在候选里时不能拿来凑数，引擎只会回「该牌不可选」，
+                // 自对弈 800 局里这一类占 34 次。交不出牌就放弃。
+                const equip = equippedCards(self)
+                    .find((c) => candidates.length === 0 || candidates.includes(c.id))
                 if (equip) payload.cardIds = [equip.id]
                 else payload.action = 'decline'
             }
@@ -2191,6 +2544,16 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             break
         }
         case ResponseType.SKILL_ZHONGYONG_GIVE: {
+            // 界周仓：整批交出，交给手牌最少的队友
+            if (ctx.zhongyongAll) {
+                const allSelf = state.generals[targetIndex]
+                const allRecipient = myGenerals(state, playerId)
+                    .filter(({ g }) => g.alive && g !== allSelf)
+                    .sort((a, b) => a.g.hand.length - b.g.hand.length)[0]
+                payload.action = allRecipient ? 'confirm' : 'decline'
+                if (allRecipient) payload.targetIndex = allRecipient.index
+                break
+            }
             // 忠勇：把牌交给手牌最少的队友，优先给红色牌（可触发追杀）
             const self = state.generals[targetIndex]
             const recipient = myGenerals(state, playerId)
@@ -2293,12 +2656,33 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
         }
         case ResponseType.SKILL_FANKUI_PICK: {
             const source = state.generals[ctx.sourceGeneralIndex]
-            if (source && source.hand.length > 0) {
+            if (ctx.liyu) {
+                // 利驭：优先拿非装备牌（避免触发决斗），没有则拿价值最高的装备
+                const safe = [
+                    ...(source?.hand ?? []),
+                    ...(source?.judgeZone ?? []),
+                ].filter((c) => c.category !== CardCategory.EQUIPMENT)
+                    .sort((a, b) => keepValue(b) - keepValue(a))[0]
+                const equipCard = source
+                    ? Object.values(source.equip).filter((c): c is Card => !!c)
+                        .sort((a, b) => keepValue(b) - keepValue(a))[0]
+                    : undefined
+                if (safe) payload.cardId = safe.id
+                else if (equipCard) payload.cardId = equipCard.id
+            } else if (source && source.hand.length > 0) {
                 payload.cardId = '__random_hand__'
             } else {
                 const equipCard = source ? Object.values(source.equip).find((c) => !!c) : undefined
                 if (equipCard) payload.cardId = equipCard.id
             }
+            break
+        }
+        case ResponseType.SKILL_SHANGYI_PICK: {
+            const victim = state.generals[ctx.shangyiTargetIndex as number]
+            const best = victim && victim.hand.length > 0
+                ? [...victim.hand].sort((a, b) => keepValue(b) - keepValue(a))[0]
+                : undefined
+            if (best) payload.cardId = best.id
             break
         }
         case ResponseType.SKILL_QICE_PICK: {
@@ -2513,8 +2897,15 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             break
         }
         case ResponseType.EQUIP_KYLIN_BOW_CHOICE: {
-            // 麒麟弓：优先弃对方的 -1 马（影响其进攻），其次 +1 马
+            // 麒麟弓：优先弃对方的 -1 马（影响其进攻），其次 +1 马；加强版可弃任意装备
             const victim = state.generals[ctx.targetIndex]
+            if (ctx.anyEquip) {
+                if (victim?.equip.weapon) payload.action = 'weapon'
+                else if (victim?.equip.armor) payload.action = 'armor'
+                else if (victim?.equip.minus_horse) payload.action = 'minus_horse'
+                else if (victim?.equip.plus_horse) payload.action = 'plus_horse'
+                break
+            }
             if (victim?.equip.minus_horse) payload.action = 'minus'
             else if (victim?.equip.plus_horse) payload.action = 'plus'
             break
@@ -2588,9 +2979,11 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             const currentJudge = ctx.judgeCard as Card | undefined
             if (currentJudge && wantSuit(currentJudge.suit, currentJudge.value)) break
 
-            const isHuanshi = knowsSkill(asker, 'zhugejin_huanshi')
+            const huanshiOwner = typeof ctx.huanshiOwnerIndex === 'number'
+                ? state.generals[ctx.huanshiOwnerIndex] : undefined
+            const isHuanshi = !!huanshiOwner?.alive
             const isGuicai = knowsSkill(asker, 'simayi_guicai') || knowsSkill(asker, 'simayi_jie_guicai')
-            const isGuidao = knowsSkill(asker, 'zhangjiao_guidao')
+            const isGuidao = knowsSkill(asker, 'zhangjiao_guidao') || knowsSkill(asker, 'zhangjiao_jie_guidao')
             // 鬼才 / 缓释只改己方判定；鬼道可改任意角色的判定。
             // 按“发问者”所在阵营判断，而不是 AI 自己的阵营——本地对战时两者可能不同。
             if (!isGuidao && judging.faction !== asker.faction) break
@@ -2599,7 +2992,7 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             const critical = !judgeType && (!!delayedName || judging.hp <= 1)
             const maxKeep = critical ? 90 : 80
             if (isHuanshi || isGuicai) {
-                const pool: Card[] = isHuanshi ? [...asker.hand, ...equippedCards(asker)] : [...asker.hand]
+                const pool: Card[] = isHuanshi ? [...huanshiOwner!.hand] : [...asker.hand]
                 const substitute = pool
                     .filter((c) => wantSuit(c.suit, c.value) && keepValue(c) <= maxKeep)
                     .sort((a, b) => keepValue(a) - keepValue(b))[0]
@@ -2820,8 +3213,9 @@ function flankOrder(state: GameState, faction: Faction): number[] {
 
 function knowsSkill(g: GeneralView | undefined, skillId: string): boolean {
     if (!g) return false
-    if (g.acquiredSkills?.includes(skillId)) return true
-    return !!getGeneralById(g.generalId)?.skills.some((s) => s.id === skillId)
+    const gid = g.generalId
+    if (g.acquiredSkills?.some((id) => skillMatches(gid, id, skillId))) return true
+    return !!getGeneralById(gid)?.skills.some((s) => skillMatches(gid, s.id, skillId))
 }
 
 function distanceTo(state: GameState, from: GeneralView, to: GeneralView): number {
@@ -2856,9 +3250,13 @@ function pickDirection(state: GameState, casterIndex: number, allyFirst: boolean
 function slashQuotaThisTurn(state: GameState, active: GeneralView): number {
     // 天义 / 陷阵拼点没赢：本回合直接不能使用【杀】
     if (active.cannotSlashTurn) return 0
+    // 诸葛连弩 / 咆哮：默认不限次数，开启“限五次”规则时按 5 张计（与引擎一致）
     let max = 1
-    if (knowsSkill(active, 'zhangfei_paoxiao')) max = 999
-    else if (active.equip.weapon?.name === EquipmentCardName.CROSSBOW) max = 4
+    const unlimitedCap = state.skillLimitRule === 'limited' ? 5 : 999
+    if (knowsSkill(active, 'zhangfei_paoxiao')) max = unlimitedCap
+    else if (active.equip.weapon?.name === EquipmentCardName.CROSSBOW) {
+        max = state.weaponEnhance === true ? 4 : unlimitedCap
+    }
     max += (active.dufengBonus ?? 0) + (active.extraSlashCount ?? 0)
         + (active.qimouSlashBonus ?? 0)
         + (knowsSkill(active, 'lvbu_jing_shenji') ? 1 : 0)
@@ -2888,30 +3286,24 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     // 分支，而该分支拒绝以自己为目标，装备/无中生有这类候选必然整张作废。
     const hand = (active.hand ?? []).filter((c) => !isJiaozhaoSealed(active, c.id))
     const self = state.activeGeneralIndex
-    // 惴恐 / 龙临：本回合（阶段）只能指定自己为目标。指向他人的牌与技能会被引擎
-    // 整张拒绝，此时直接当作执行失败，让候选表继续尝试后面的合法动作，而不是空过。
+    // 惴恐 / 龙临：本回合（阶段）使用牌只能指定自己为目标。引擎只在使用牌这条
+    // 通道上校验（handleUseCardImpl），技能通道不受限，所以技能不套这层拦截。
+    // 判据只有「显式指定了他人」：群体锦囊的目标由引擎内部展开，targetIndices 为空时
+    // 引擎那侧的 targets 也是空的，some() 恒为假 —— 桃园/五谷/南蛮/万箭/铁索在惴恐下
+    // 全部合法，把它们一并拦掉会让整个出牌阶段空过。
     const selfOnly = selfTargetOnly(state, active)
+    // 拒战（严颜）：引擎按“显式指定的目标”比对，命中就整张拒绝
+    const juzhanBlocked = juzhanForbiddenIndex(state, active)
     const targetsOthers = (indices: number[]): boolean =>
         indices.some((i) => i !== self)
-    // 群体锦囊的目标由引擎内部展开，targetIndices 为空也会被拒；但【铁索连环】重铸
-    // 不指定任何目标，引擎放行，不能一并拦掉。
-    const AOE_NAMES: string[] = [
-        TrickCardName.BARBARIANS, TrickCardName.ARROWS,
-        TrickCardName.PEACH_GARDEN, TrickCardName.HARVEST, TrickCardName.IRON_CHAIN,
-    ]
-    const touchesOthers = (card: Card, targetIndices: number[], extra?: Record<string, unknown>): boolean => {
-        if (targetsOthers(targetIndices)) return true
-        if (!AOE_NAMES.includes(card.name)) return false
-        return !(card.name === TrickCardName.IRON_CHAIN && extra?.recast === true)
-    }
 
     const use = (card: Card, targetIndices: number[], extra?: Record<string, unknown>): boolean => {
-        if (selfOnly && touchesOthers(card, targetIndices, extra)) return false
+        if (selfOnly && targetsOthers(targetIndices)) return false
+        if (juzhanBlocked !== undefined && targetIndices.includes(juzhanBlocked)) return false
         return handleUseCard(state, playerId, { cardId: card.id, targetIndices, extra } as any) === undefined
     }
 
     const useSkill = (skillId: string, targetIndices: number[] = [], cardIds: string[] = []): boolean => {
-        if (selfOnly && targetsOthers(targetIndices)) return false
         return handleUseSkill(state, playerId, { skillId, targetIndices, cardIds }) === undefined
     }
 
@@ -2964,14 +3356,23 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     // 濒死时的【酒】救不了命，且禁酒持有者的酒只能当杀打（且必须选目标），
     // 若当作「喝一口酒加伤」直接出，引擎会报「请选择【杀】的目标」并整回合空过。
     const wineCard = jinjiuTurnsWineIntoSlash(active) ? undefined : hand.find((c) => c.name === BasicCardName.WINE)
+    // 一回合只能用一次酒：酒杀会清空 wineDrunk，光看它会重复报价并被引擎拒绝
+    const wineUsedThisTurn = (active.basicUsedThisTurn ?? []).includes(BasicCardName.WINE)
+    const wineReady = !!wineCard && !active.wineDrunk && !wineUsedThisTurn
     // 用配额判定而不是「首张杀」：连弩第 5 张、天义落败后的杀都会被引擎拒绝，
     // 一次被拒就整回合空过（见 slashQuotaThisTurn 的注释）
     const canAttack = state.attackUsedThisTurn < slashQuotaThisTurn(state, active)
     const inRangeFoes = enemies.filter(
-        ({ g }) => !blockedByKongcheng(g) && getAttackRange(active, g, state.generals).inRange
+        ({ g, index }) => !blockedByKongcheng(g) && index !== juzhanBlocked
+            && getAttackRange(active, g, state.generals).inRange
     )
+    // 陷阵（界高顺）拼点没赢：本回合不能对该角色使用【杀】。
+    // 引擎在 handleBasicCard 的杀分支里整张拒绝，而求援会在结算时追加目标，
+    // 只要原目标里有这个人这张杀就永远出不去 —— seed 6246 因此把同一张杀
+    // 重复选了近 3 万次，一局停在 5 位武将的第 84 大回合。
+    const slashFoes = inRangeFoes.filter(({ index }) => index !== active.xianzhenLoseIndex)
     // 本回合最大可造成伤害（杀 + 酒），用于判断斩杀窗口
-    const damagePotential = (slashesInHand.length > 0 ? 1 : 0) + (wineCard && !active.wineDrunk ? 1 : 0)
+    const damagePotential = (slashesInHand.length > 0 ? 1 : 0) + (wineReady ? 1 : 0)
     const killTarget = canAttack && slashesInHand.length > 0
         ? inRangeFoes.find(({ g }) => g.hp <= damagePotential)
         : undefined
@@ -3129,31 +3530,45 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     }
 
     // 制衡：每换掉一张废牌都是净收益，桃/闪不参与
-    if (knowsSkill(active, 'sunquan_zhiheng') && !onceUsed('sunquan_zhiheng')) {
+    const zhihengSkill = knowsSkill(active, 'sunquan_jing_zhiheng') ? 'sunquan_jing_zhiheng'
+        : (knowsSkill(active, 'sunquan_jie_zhiheng') ? 'sunquan_jie_zhiheng' : 'sunquan_zhiheng')
+    if (knowsSkill(active, zhihengSkill) && !onceUsed(zhihengSkill)) {
         const paid = [...new Set([...junkCardIds(hand, 3, active), ...surplusCardIds(hand)])].slice(0, 3)
         if (paid.length > 0) {
             offer('skill:zhiheng', 52 + paid.length * 8, ['value'],
-                () => useSkill('sunquan_zhiheng', [], paid))
+                () => useSkill(zhihengSkill, [], paid))
         }
     }
     // 仁德：攒够 2 张换回血/牌差，优先给能吃下这类牌的队友
-    if (knowsSkill(active, 'liubei_rende') && hand.length >= 2) {
-        const rende = rendeOpportunity(active, alliesButSelf.map(({ g }) => g), active.rendeHealedThisTurn)
+    const jieRende = knowsSkill(active, 'liubei_jie_rende')
+    if ((knowsSkill(active, 'liubei_rende') || jieRende) && hand.length >= 2) {
+        const rendeReceived = active.rendeReceivedThisPhase ?? []
+        const rendeAllies = jieRende
+            ? alliesButSelf.filter(({ index }) => !rendeReceived.includes(index))
+            : alliesButSelf
+        const rende = rendeOpportunity(active, rendeAllies.map(({ g }) => g), active.rendeHealedThisTurn)
         if (rende.trigger) {
+            // 全是桃时不送：引擎要求至少一张给出牌，空 cardIds 会被整次拒绝
             const giftIds = [...hand].filter((c) => !isPeach(c))
                 .sort((a, b) => keepValue(a) - keepValue(b)).slice(0, 2)
             // 按两张牌里更值钱的那张挑接收者
-            const receiver = giftIds.length === 2 ? giftReceiver(giftIds[1]) : undefined
-            if (receiver) {
-                offer('skill:rende', (rende.wantHeal ? 66 : 50) + cardFit(receiver.g, giftIds[1]) * 4, ['value'],
-                    () => useSkill('liubei_rende', [receiver.index], giftIds.map((c) => c.id)))
+            const bestGift = giftIds[giftIds.length - 1]
+            const receiver = giftIds.length === 2 ? giftReceiver(bestGift) : undefined
+            const eligibleReceiver = receiver && rendeAllies.some(({ index }) => index === receiver.index)
+                ? receiver : rendeAllies[0]
+            if (giftIds.length > 0 && eligibleReceiver) {
+                const rendeSkill = jieRende ? 'liubei_jie_rende' : 'liubei_rende'
+                offer('skill:rende', (rende.wantHeal ? 66 : 50) + cardFit(eligibleReceiver.g, bestGift) * 4, ['value'],
+                    () => useSkill(rendeSkill, [eligibleReceiver.index], giftIds.map((c) => c.id)))
             }
         }
     }
-    // 挑衅：目标空手时几乎无风险（只能弃牌）
+    // 挑衅：目标空手时几乎无风险（只能弃牌）；界姜维可选范围外角色，对方只能弃牌
     if (knowsSkill(active, 'jiangwei_tiaoxin') && !onceUsed('jiangwei_tiaoxin')) {
+        const tiaoxinJieAi = active.generalId === 'jiangwei_jie'
         const tiaoxinTarget = enemies.find(
-            ({ g }) => g.hand.length === 0 && hasCard(g) && getAttackRange(g, active, state.generals).inRange
+            ({ g }) => g.hand.length === 0 && hasCard(g)
+                && (tiaoxinJieAi || getAttackRange(g, active, state.generals).inRange)
         )
         if (tiaoxinTarget) {
             offer('skill:tiaoxin', 58 - backfire(tiaoxinTarget.g) * 0.5, ['control'],
@@ -3233,7 +3648,7 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
         }
     }
     // 结姻（界孙尚香）：弃一张牌换成“体力高者摸牌、体力低者回血”
-    if (knowsSkill(active, 'sunshangxiang_jieyuan') && !onceUsed('sunshangxiang_jieyuan') && hand.length > 0) {
+    if (knowsSkill(active, 'sunshangxiang_jie_jieyin') && !onceUsed('sunshangxiang_jie_jieyin') && hand.length > 0) {
         const jyMale = alliesButSelf
             .filter(({ g }) => getGeneralById(g.generalId)?.gender === 'male')
             .sort((a, b) => (b.g.maxHp - b.g.hp) - (a.g.maxHp - a.g.hp))[0]
@@ -3242,7 +3657,7 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
             || active.hp < active.maxHp || jyMale.g.hp < jyMale.g.maxHp)) {
             const jyValue = (active.hp < active.maxHp ? 12 : 0) + (jyMale.g.maxHp - jyMale.g.hp) * 8 + 10
             offer('skill:jieyuan', jyValue, ['value'],
-                () => useSkill('sunshangxiang_jieyuan', [jyMale.index], [jyCard.id]))
+                () => useSkill('sunshangxiang_jie_jieyin', [jyMale.index], [jyCard.id]))
         }
     }
     // 矫诏：已声明的牌要打出去，否则这次发动就白费了
@@ -3253,7 +3668,7 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
             const jzName = active.jiaozhaoAs
             if (jzName === 'peach' && active.hp < active.maxHp && active.hp <= 2) {
                 offer('jiaozhao:peach', 58, ['value'], () => use(jzShown, []))
-            } else if (jzName === 'wine' && !active.wineDrunk && jzFoe && slashesInHand.length > 0) {
+            } else if (jzName === 'wine' && wineReady && jzFoe && slashesInHand.length > 0) {
                 offer('jiaozhao:wine', 60, ['burst'], () => use(jzShown, []))
             } else if (jzName === 'attack' && jzFoe && canAttack) {
                 offer('jiaozhao:attack', 56 + terms(jzFoe.g, { defense: 0.4 }), ['burst'],
@@ -3269,25 +3684,27 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
             }
         }
     }
-    // 矫诏（界郭皇后）：本阶段限一次当基本牌；修改一/二为每轮限一次的额外用法
-    if (knowsSkill(active, 'simayi_jie_jiaozhao')) {
+    // 矫诏（界郭皇后 / 司马懿-竞）：本阶段限一次当基本牌；修改一/二为每轮限一次的额外用法
+    const jzJing = knowsSkill(active, 'simayi_jing_jiaozhao')
+    if (jzJing) {
+        const jzSkill = 'simayi_jing_jiaozhao'
         const jzRound = state.roundState?.roundNumber ?? 0
         const jzJunk = [...hand].sort((a, b) => keepValue(a) - keepValue(b))[0]
         const jzUpgrade = active.jiaozhaoUpgrade ?? 0
-        if (!onceUsed('simayi_jie_jiaozhao') && jzJunk) {
+        if (!onceUsed(jzSkill) && jzJunk) {
             offer('skill:jiaozhao_jie', 42, ['value'],
-                () => useSkill('simayi_jie_jiaozhao', [], [jzJunk.id]))
+                () => useSkill(jzSkill, [], [jzJunk.id]))
         }
         if (jzUpgrade >= 1 && active.jiaozhaoMod1Round !== jzRound && jzJunk) {
             offer('skill:jiaozhao_jie_mod1', 38, ['value'],
-                () => useSkill('simayi_jie_jiaozhao_mod1', [], [jzJunk.id]))
+                () => useSkill(`${jzSkill}_mod1`, [], [jzJunk.id]))
         }
         if (jzUpgrade >= 2 && active.jiaozhaoMod2Round !== jzRound && inRangeFoes.length > 0) {
             offer('skill:jiaozhao_jie_mod2', 52 + tempo.output, ['burst'],
-                () => useSkill('simayi_jie_jiaozhao_mod2'))
+                () => useSkill(`${jzSkill}_mod2`))
         }
     }
-    if (knowsSkill(active, 'xuhuang_duanliang')) {
+    if (knowsSkill(active, 'xuhuang_jie_duanliang')) {
         const blackBasic = [...hand]
             .filter((c) => isBlackCard(c) && keepValue(c) <= 70 &&
                 (c.category === CardCategory.BASIC || c.category === CardCategory.EQUIPMENT))
@@ -3296,7 +3713,7 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
             duanliangTargetLegal(active, g, getAttackRange(active, g, state.generals).distance))
         if (blackBasic && target) {
             offer('skill:duanliang', 56 + (target.g.hand.length <= 2 ? 8 : 0), ['control'],
-                () => useSkill('xuhuang_duanliang', [target.index], [blackBasic.id]))
+                () => useSkill('xuhuang_jie_duanliang', [target.index], [blackBasic.id]))
         }
     }
     // 强袭（界典韦）：弃武器几乎无代价，掉血只在能斩杀时做
@@ -3328,12 +3745,24 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
                 () => useSkill('doudizhu_qiangyi', [qyVictim.index]))
         }
     }
+    // 立牧（刘焉）：判定区没有牌时，用一张废牌换回复与“无距离/次数限制”
+    if (knowsSkill(active, 'liuyan_limu') && !active.limuUsedPhase
+        && active.judgeZone.length === 0 && !active.abolishedJudgeZone && hand.length >= 2
+        && (active.hp < active.maxHp || hand.some(isSlash))) {
+        const limuJunk = [...hand].sort((a, b) => keepValue(a) - keepValue(b))[0]
+        if (limuJunk) {
+            offer('skill:limu', active.hp < active.maxHp ? 58 : 46, ['value', 'burst'],
+                () => useSkill('liuyan_limu', [], [limuJunk.id]))
+        }
+    }
     // 慎行（顾雍）：手牌溢出时弃两张废牌摸一张
-    if (knowsSkill(active, 'guyong_shenxing') && hand.length >= 5) {
+    const shenxingId = knowsSkill(active, 'guyong_jie_shenxing') ? 'guyong_jie_shenxing'
+        : knowsSkill(active, 'guyong_shenxing') ? 'guyong_shenxing' : undefined
+    if (shenxingId && hand.length >= 5) {
         const shenxingCards = [...hand].sort((a, b) => keepValue(a) - keepValue(b)).slice(0, 2)
         if (shenxingCards.length === 2) {
             offer('skill:shenxing', 38, ['value'],
-                () => useSkill('guyong_shenxing', [], shenxingCards.map(c => c.id)))
+                () => useSkill(shenxingId, [], shenxingCards.map(c => c.id)))
         }
     }
     // 去疾（司马朗）：按已损失体力回血，先救最危险的队友
@@ -3392,6 +3821,92 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
                 () => useSkill('wangping_feijun', [feijunTarget.index], [feijunCard.id]))
         }
     }
+    // ── 洛书版第十批主动技 ──
+    // 峻刑（满宠）：弃废牌，令手牌最多的敌人弃等量牌并失血或翻面
+    if (knowsSkill(active, 'manchong_junxing') && !onceUsed('manchong_junxing')
+        && hand.length >= 2 && enemies.length > 0) {
+        const junxingTarget = [...enemies].sort((a, b) => b.g.hand.length - a.g.hand.length)[0]
+        offer('skill:junxing', 56, ['control'],
+            () => useSkill('manchong_junxing', [junxingTarget.index]))
+    }
+    // 抚蛮（马忠）：把废牌交给队友，令其视为使用【杀】
+    if (knowsSkill(active, 'mazhong_fuman') && hand.length >= 1 && alliesButSelf.length > 0) {
+        const fumanCard = [...hand].sort((a, b) => keepValue(a) - keepValue(b))[0]
+        const fumanTarget = [...alliesButSelf]
+            .filter(({ index }) => !(active.fumanTargetsPhase ?? []).includes(index))
+            .sort((a, b) => a.g.hand.length - b.g.hand.length)[0]
+        if (fumanTarget) {
+            offer('skill:fuman', 44, ['value'],
+                () => useSkill('mazhong_fuman', [fumanTarget.index], [fumanCard.id]))
+        }
+    }
+    // 剑合（张华）：重铸同名牌/装备，令敌人重铸或受雷电伤害
+    if (knowsSkill(active, 'zhanghua_jianhe') && enemies.length > 0) {
+        const equipPair = hand.filter(c => c.category === CardCategory.EQUIPMENT).slice(0, 2)
+        let jianhePair = equipPair.length === 2 ? equipPair : undefined
+        if (!jianhePair) {
+            const byName = new Map<string, Card[]>()
+            for (const c of hand) {
+                const arr = byName.get(c.name) ?? []
+                arr.push(c)
+                byName.set(c.name, arr)
+            }
+            for (const arr of byName.values()) {
+                if (arr.length >= 2) { jianhePair = arr.slice(0, 2); break }
+            }
+        }
+        if (jianhePair) {
+            const jianheTarget = enemies.find(({ index }) =>
+                !(active.jianheTargetsPhase ?? []).includes(index))
+            if (jianheTarget) {
+                const pairIds = jianhePair.map(c => c.id)
+                offer('skill:jianhe', 50, ['control'],
+                    () => useSkill('zhanghua_jianhe', [jianheTarget.index], pairIds))
+            }
+        }
+    }
+    // 自固（势孙綝）：弃废牌，获得装备
+    if (knowsSkill(active, 'sunchen_zigu') && active.ziguTurn !== state.turnSerial
+        && hand.length >= 1) {
+        const ziguCard = [...hand].sort((a, b) => keepValue(a) - keepValue(b))[0]
+        const ziguTarget = enemies.find(({ g }) => equippedCards(g).length > 0)
+        if (ziguTarget || equippedCards(active).length > 0) {
+            offer('skill:zigu', 48, ['value'],
+                () => useSkill('sunchen_zigu',
+                    ziguTarget ? [ziguTarget.index] : [], [ziguCard.id]))
+        }
+    }
+    // 强峙（郑浑）：弃置双方共三张牌
+    if (knowsSkill(active, 'zhenghun_qiangzhi') && active.qiangzhiTurn !== state.turnSerial
+        && hand.length >= 1 && enemies.length > 0) {
+        const qiangzhiTarget = enemies.find(({ g }) =>
+            g.hand.length + equippedCards(g).length >= 1)
+        if (qiangzhiTarget) {
+            offer('skill:qiangzhi', 54, ['control'],
+                () => useSkill('zhenghun_qiangzhi', [qiangzhiTarget.index]))
+        }
+    }
+    // 移荣（族吴苋）：手牌偏离上限时调整
+    if (knowsSkill(active, 'wuxian_zu_yirong') && (active.yirongUsesPhase ?? 0) < 2
+        && hand.length !== getHandLimit(active)) {
+        offer('skill:yirong', 40, ['value'], () => useSkill('wuxian_zu_yirong', []))
+    }
+    // 蛮王（SP孟获）：弃废牌依次执行收益项；已持有叛侵时只为回血再发动
+    if (knowsSkill(active, 'menghuo_sp_manwang') && hand.length >= 2) {
+        const mwJunk = junkCardIds(hand, 4, active)
+        const mwWounded = active.hp < active.maxHp
+        // 未持有叛侵：先拿 1 项（获得叛侵，本阶段弃掉的牌正好当叛侵的燃料）；
+        // 已持有叛侵：只有在能凑够 3 项回血时才再发动，避免“弃1摸1”空转
+        const mwCount = mwWounded && mwJunk.length >= 3
+            ? 3
+            : (active.panqinOwned ? 0 : (mwJunk.length >= 1 ? 1 : 0))
+        if (mwCount > 0 && hand.length > mwCount) {
+            const mwIds = mwJunk.slice(0, mwCount)
+            const mwScore = 42 + (mwWounded ? 8 : 0) + (active.panqinOwned ? 0 : 6)
+            offer('skill:manwang', mwScore, ['value', 'defense'],
+                () => useSkill('menghuo_sp_manwang', [], mwIds))
+        }
+    }
     // 谏计（黄权）：让最缺牌的队友摸一张并尝试使用
     if (knowsSkill(active, 'huangquan_jianji') && !onceUsed('huangquan_jianji')) {
         const jianjiTarget = [...alliesButSelf].sort(
@@ -3399,6 +3914,17 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
         if (jianjiTarget) {
             offer('skill:jianji', 52, ['value'],
                 () => useSkill('huangquan_jianji', [jianjiTarget.index]))
+        }
+    }
+    // 尚义（蒋钦）：用最没用的牌换敌方一张手牌，并看清其手牌
+    if (knowsSkill(active, 'jiangqin_shangyi') && !onceUsed('jiangqin_shangyi') && hand.length >= 2) {
+        const shangyiCard = [...hand].sort((a, b) => keepValue(a) - keepValue(b))[0]
+        const shangyiTarget = [...enemies]
+            .filter(({ g }) => g.hand.length > 0)
+            .sort((a, b) => b.g.hand.length - a.g.hand.length || a.index - b.index)[0]
+        if (shangyiTarget && shangyiCard) {
+            offer('skill:shangyi', 54, ['control'],
+                () => useSkill('jiangqin_shangyi', [shangyiTarget.index], [shangyiCard.id]))
         }
     }
     // 反间（界周瑜）：把最没用的牌塞给敌方，逼迫其弃牌或失血
@@ -3826,7 +4352,7 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
         if (hand.length > handLimit) return true
         return g.hp <= 3 && g.hand.length === 0 && !g.equip.armor && hit >= 0.99
     }
-    if (wineCard && !active.wineDrunk && canAttack && slashesInHand.length > 0) {
+    if (wineReady && canAttack && slashesInHand.length > 0) {
         const worthWine = inRangeFoes.some(({ g }) => wineWorthTarget(g))
         if (worthWine) {
             offer('wine', BASE_SCORE.wine + 60 + tempo.burst, ['burst'], () => use(wineCard, [self]))
@@ -3849,7 +4375,7 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
         const slash = slashesInHand[0]
         const slashDamage = active.wineDrunk ? 2 : 1
         // 无效目标直接排除：仁王盾黑杀、藤甲普通杀（青釭剑/属性杀除外）
-        const slashCandidates = inRangeFoes.filter(({ g }) => {
+        const slashCandidates = slashFoes.filter(({ g }) => {
             const armor = g.equip.armor?.name
             const armorMatch = armor === EquipmentCardName.VINE &&
                 (slash?.name === BasicCardName.FIRE_SLASH || slash?.name === BasicCardName.THUNDER_SLASH ||
@@ -3888,7 +4414,7 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
             const killBonus = lethalChance *
                 (slashTarget.g.seatRole === SeatRole.COMMANDER ? 40 : 12) + urgency * lethalChance
             // 酒与铁索是杀的前置动作，未完成时压后出杀
-            const needsWineFirst = !!wineCard && !active.wineDrunk && wineWorthTarget(slashTarget.g)
+            const needsWineFirst = wineReady && wineWorthTarget(slashTarget.g)
             const armorMatch = slashTarget.g.equip.armor?.name === EquipmentCardName.VINE &&
                 (slash.name === BasicCardName.FIRE_SLASH || slash.name === BasicCardName.THUNDER_SLASH ||
                     active.equip.weapon?.name === EquipmentCardName.ZHUQUE_FAN)
@@ -3965,7 +4491,8 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
             .map((holder) => ({
                 holder,
                 killTarget: enemies.find(({ g, index }) =>
-                    index !== holder.index && getAttackRange(holder.g, g, state.generals).inRange)
+                    index !== holder.index && getAttackRange(holder.g, g, state.generals).inRange
+                    && !blockedByWeimu(g, borrowSword))
             }))
             .find((p) => !!p.killTarget)
         if (pair?.killTarget) {
@@ -4007,7 +4534,8 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     if (supply) {
         // 兵粮寸断断的是摸牌：手牌见底、又马上要行动的目标最疼
         const supplyTarget = delayedFoes
-            .filter(({ g }) => !hasJudge(g, TrickCardName.SUPPLY_SHORTAGE) && distanceTo(state, active, g) <= 1)
+            .filter(({ g }) => !hasJudge(g, TrickCardName.SUPPLY_SHORTAGE)
+                && distanceTo(state, active, g) <= 1 && !blockedByWeimu(g, supply))
             .sort((a, b) => (planOf(b.index)?.threat ?? 0) - (planOf(a.index)?.threat ?? 0) ||
                 a.index - b.index)[0]
         if (supplyTarget) {
@@ -4049,10 +4577,39 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     if (knowsSkill(active, 'zhurong_changbiao') && !onceUsed('zhurong_changbiao') && canAttack) {
         const cbJunk = hand.filter((c) => !isSlash(c) && !isDodge(c) && !isPeach(c) && keepValue(c) <= 3)
             .sort((a, b) => keepValue(a) - keepValue(b))[0]
-        const cbFoe = inRangeFoes[0]
+        const cbFoe = slashFoes[0]
         if (cbJunk && cbFoe) {
             offer('zhurong_changbiao', 58, ['burst'], () =>
                 useSkill('zhurong_changbiao', [cbFoe.index], [cbJunk.id]))
+        }
+    }
+    // 魄袭（神甘宁）：弃四张不同花色换资源，目标手牌够多时才值得
+    if (knowsSkill(active, 'ganning_shen_poxi') && !onceUsed('ganning_shen_poxi')
+        && hand.length >= 2 && enemies.length > 0) {
+        const pxFoe = enemies.filter(({ g }) => g.hand.length >= 3)[0]
+        if (pxFoe) {
+            offer('ganning_shen_poxi', 52, ['control'], () =>
+                useSkill('ganning_shen_poxi', [pxFoe.index]))
+        }
+    }
+    // 攻心（界吕蒙·觉醒后）：观看敌方手牌并弃置其中一张♥
+    if ((knowsSkill(active, 'lvmeng_jie_gongxin')
+        || (active.acquiredSkills ?? []).includes('lvmeng_jie_gongxin'))
+        && !onceUsed('lvmeng_jie_gongxin') && enemies.length > 0) {
+        const gxFoe = enemies.filter(({ g }) => g.hand.length > 0)[0]
+        if (gxFoe) {
+            offer('lvmeng_jie_gongxin', 54, ['control'], () =>
+                useSkill('lvmeng_jie_gongxin', [gxFoe.index]))
+        }
+    }
+    // 流矢（曹性）：拿一张♥废牌换一张无距离限制的杀，顺带压目标手牌上限
+    if (knowsSkill(active, 'caoxing_liushi') && canAttack && enemies.length > 0) {
+        const lsHeart = hand
+            .filter((c) => c.suit === CardSuit.HEART && !isPeach(c) && keepValue(c) <= 4)
+            .sort((a, b) => keepValue(a) - keepValue(b))[0]
+        if (lsHeart) {
+            offer('caoxing_liushi', 57, ['burst'], () =>
+                useSkill('caoxing_liushi', [enemies[0].index], [lsHeart.id]))
         }
     }
     // 品第：对敌人弃牌，或给缺牌的队友补牌
@@ -4091,6 +4648,55 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
         const dmFoe = enemies.filter(({ g }) => g.hand.length >= 3)[0]
         if (dmAlly && dmFoe) {
             offer('lusu_dimeng', 48, ['control'], () => useSkill('lusu_dimeng', [dmAlly.index, dmFoe.index]))
+        }
+    }
+    // 巧说（界简雍）：与敌人拼点，赢则下一张基本牌多指定一个目标
+    if (knowsSkill(active, 'jianyong_qiaoshuo') && !onceUsed('jianyong_qiaoshuo') && hand.length > 0) {
+        const qsFoe = enemies.filter(({ g }) => g.hand.length > 0)
+            .sort((a, b) => a.g.hand.length - b.g.hand.length)[0]
+        if (qsFoe) {
+            offer('jianyong_qiaoshuo', 34, ['control'],
+                () => useSkill('jianyong_qiaoshuo', [qsFoe.index]))
+        }
+    }
+    // 过论（SP庞统）：换走对手一张手牌，自己出点数最小的牌（交换前点数小者摸牌）
+    if (knowsSkill(active, 'pangtong_sp_guolun') && !onceUsed('pangtong_sp_guolun') && hand.length > 0) {
+        const glFoe = enemies.filter(({ g }) => g.hand.length > 0)[0]
+        if (glFoe) {
+            offer('pangtong_sp_guolun', 38, ['value'],
+                () => useSkill('pangtong_sp_guolun', [glFoe.index]))
+        }
+    }
+    // 督粮（李严）：抢敌方一张牌，再决定给牌堆顶基本牌还是让其多摸
+    if (knowsSkill(active, 'liyan_duliang') && !onceUsed('liyan_duliang')) {
+        const dlFoe = enemies.filter(({ g }) => hasCard(g))[0]
+        if (dlFoe) offer('liyan_duliang', 46, ['value'], () => useSkill('liyan_duliang', [dlFoe.index]))
+    }
+    // 治严（星徐晃）：补到体力上限优先，其次把手牌压回体力值
+    if (knowsSkill(active, 'xuhuang_xing_zhiyan')) {
+        if (!onceUsed('xuhuang_xing_zhiyan_fill') && hand.length < active.maxHp) {
+            offer('xuhuang_xing_zhiyan', 44, ['value'], () => useSkill('xuhuang_xing_zhiyan', []))
+        } else if (!onceUsed('xuhuang_xing_zhiyan_give') && hand.length > active.hp) {
+            const zyAlly = allies.filter(({ g, index }) => index !== self && g.alive)[0]
+            if (zyAlly) {
+                offer('xuhuang_xing_zhiyan', 30, ['value'],
+                    () => useSkill('xuhuang_xing_zhiyan', [zyAlly.index]))
+            }
+        }
+    }
+    // 晏如（费祎）：奇偶两种形态各限一次，手牌足够时等于净赚三张
+    if (knowsSkill(active, 'feiyi_yanru') && hand.length >= 3) {
+        const yanruKey = hand.length % 2 === 1 ? 'feiyi_yanru_odd' : 'feiyi_yanru_even'
+        if (!onceUsed(yanruKey)) {
+            offer('feiyi_yanru', 42, ['value'], () => useSkill('feiyi_yanru', []))
+        }
+    }
+    // 缔盟（界鲁肃）：代价延后到本阶段结束时弃置，条件更宽松
+    if (knowsSkill(active, 'lusu_jie_dimeng') && !onceUsed('lusu_jie_dimeng') && hand.length >= 2) {
+        const dmjAlly = allies.filter(({ g, index }) => index !== self && g.hand.length <= 1)[0]
+        const dmjFoe = enemies.filter(({ g }) => g.hand.length >= 3)[0]
+        if (dmjAlly && dmjFoe) {
+            offer('lusu_jie_dimeng', 48, ['control'], () => useSkill('lusu_jie_dimeng', [dmjAlly.index, dmjFoe.index]))
         }
     }
     // 安恤：从两名有牌的角色各拿一张，再转手给手牌少的
@@ -4150,9 +4756,16 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
         is_aggressive: aggressive,
     })
     const candidates = dc ? applyPatchToOptions(dc, options) : options
+    // 候选表要覆盖「一条规则都没产生动作」和「有动作但分数全不为正」两种情况：
+    // 复盘时只有前者才算规则缺失，后者是门槛/评分问题，混在一起就没法归因。
+    const candidateRecords = candidates.map((candidate) => ({
+        ruleId: candidate.key,
+        score: Math.round(candidate.score),
+        plan: candidate.plans.join(','),
+    }))
     const viable = candidates.filter((option) => option.score > 0)
     if (viable.length === 0) {
-        endDecision(dc, 'play', 'PASS', [], { reason: 'no-viable', plan: null })
+        endDecision(dc, 'play', 'PASS', candidateRecords, { reason: 'no-viable', plan: null })
         return false
     }
     const plan = choosePlan(viable)
@@ -4177,11 +4790,6 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
         else ranked.unshift({ option: forcedOption, final: forcedOption.score })
     }
     const passScore = thresholdFor(dc, 'PASS_SCORE', PASS_SCORE)
-    const candidateRecords = candidates.map((candidate) => ({
-        ruleId: candidate.key,
-        score: Math.round(candidate.score),
-        plan: candidate.plans.join(','),
-    }))
     // 门槛真正改变结论时才算「生效」：最高分够过门槛却被拦下，
     // 或者最高分本不够而过门槛后被放行。单纯读一次阈值不算改动。
     const bestFinal = ranked[0]?.final ?? -Infinity
@@ -4501,9 +5109,10 @@ function aiDraftRaw(state: GameState, playerId: string = AI_PLAYER_ID): boolean 
 
         const rivalPicked = aiFaction === Faction.WARM ? pick.coolPicked : pick.warmPicked
         const ctx = { faction: aiFaction, pickStep: 16, team: picked, rival: rivalPicked }
-        // 枚举 3 人 × 3 座位的全部部署，位置分替代旧的主帅/前锋硬编码
-        const ranked = rankDeployments(picked, ctx, (def, position) =>
-            scoreGeneral(def) + positionScore(def, position, ctx).total)
+        // 阵容按位置选：三人与座次一起枚举，只按位置适配取最优。
+        // 先加武将强度会把“选哪三人”退化成先挑三个最强的、再排主帅和边锋。
+        const ranked = rankDeployments(picked, ctx, (def, position, groupCtx) =>
+            positionScore(def, position, groupCtx).total)
         const best = ranked[0]
         if (!best) return false
         const { commander, flankA, flankB } = best.assignment
@@ -4572,7 +5181,46 @@ function pickSkillOptionRaw(
     ctx: Record<string, any>,
 ): string {
     const has = (a: string) => options.some((o) => o.action === a)
+    if (skillId === 'lvbu_jing_zhanshen') {
+        // 战神：优先伤害与多目标，其次多摸牌，最后才是多出一杀
+        for (const pick of ['2', '3', '4', '1']) {
+            if (has(pick)) return pick
+        }
+        return 'decline'
+    }
+    if (skillId === 'ganning_jing_fenwei') {
+        // 奋威：优先令己方角色不受影响，没有己方目标则结束
+        for (const opt of options) {
+            if (opt.action === 'decline') continue
+            const idx = Number(opt.action)
+            const g = state.generals[idx]
+            if (g && !isEnemy(state, g, playerId)) return opt.action
+        }
+        return 'decline'
+    }
     const slack = options.length > 0 && options[options.length - 1].action === 'draw'
+    // 镇卫（文聘）：只在对手的牌指向队友时发动，优先令此牌无效
+    if (skillId === 'wenpin_zhenwei') {
+        const zwCaster = state.generals[(ctx.zhenweiCasterIndex as number) ?? -1]
+        const zwTarget = state.generals[(ctx.zhenweiTargetIndex as number) ?? -1]
+        if (!self || !zwCaster?.alive || !zwTarget?.alive) return 'decline'
+        if (!isEnemy(state, zwCaster, playerId) || isEnemy(state, zwTarget, playerId)) return 'decline'
+        return has('negate') ? 'negate' : 'decline'
+    }
+    // 义绝（界关羽）：令目标回复体力是代价，只对己方发动
+    if (skillId === 'guanyu_jie_yijue_heal') {
+        const yjHeal = state.generals[(ctx.yijueHealIndex as number) ?? -1]
+        if (yjHeal?.alive && !isEnemy(state, yjHeal, playerId)) return 'heal'
+        return 'decline'
+    }
+    // 素俭（邓芝）：超出手牌上限时才把本回合未获得的牌分给队友
+    if (skillId === 'dengzhi_sujian') {
+        if (!self) return 'decline'
+        const sjEligible = (ctx.sujianEligibleIds as string[]) ?? []
+        const overLimit = self.hand.length > self.hp
+        const hasAlly = state.generals.some(g => g.alive && g !== self && !isEnemy(state, g, playerId))
+        return sjEligible.length > 0 && overLimit && hasAlly ? 'sujian_give' : 'decline'
+    }
     // 洛书版扩展（九）：新增武将的选项决策
     if (skillId === 'sunluyu_mumu') {
         if (has('discard') && self
@@ -4597,9 +5245,19 @@ function pickSkillOptionRaw(
         if (has('decline')) return 'decline'
         return options[0]?.action ?? 'decline'
     }
-    if (skillId === 'sunchen_nigu_give') {
+    if (skillId === 'sunchen_shi_nigu_give') {
         if ((self?.hand.length ?? 0) <= 2 && has('decline')) return 'decline'
         return has('give') ? 'give' : 'decline'
+    }
+    if (skillId === 'xunyu_jieming') {
+        // 节命：选项1补牌幅度大时选1（目标手牌离体力上限越远越值），否则选2换自己摸一张
+        const jmAllies = ((ctx.jiemingCandidates as number[]) ?? [])
+            .map((i) => state.generals[i])
+            .filter((g) => g?.alive && !isEnemy(state, g, playerId))
+        const jmGain = jmAllies.reduce((m, g) => Math.max(m, Math.min(g.maxHp, 5) - g.hand.length), 0)
+        if (jmGain >= 2 && has('mode1')) return 'mode1'
+        if (has('mode2')) return 'mode2'
+        return options[0]?.action ?? 'decline'
     }
     if (skillId === 'chengyu_shefu_negate') {
         if ((self?.hand.length ?? 0) >= 1) return 'confirm'
@@ -4699,6 +5357,29 @@ function pickSkillOptionRaw(
             if (!self || !owner) return has('draw') ? 'draw' : 'discard'
             return self.hand.length <= owner.hand.length ? 'draw' : 'discard'
         }
+        case 'liubei_jie_rende_use': {
+            const foeInRange = !!self && state.generals.some((g) =>
+                g.alive && isEnemy(state, g, playerId)
+                && getAttackRange(self as any, g as any, state.generals).inRange)
+            if (has('peach') && self && self.hp < self.maxHp) return 'peach'
+            if (has('attack') && foeInRange) return 'attack'
+            if (has('wine') && self && self.hand.some((c) => isSlash(c))) return 'wine'
+            return has('decline') ? 'decline' : options[0]?.action ?? 'decline'
+        }
+        case 'zumao_juedi': {
+            return has('draw') ? 'draw' : options[0]?.action ?? 'draw'
+        }
+        case 'jiangwan_jing_shengxi': {
+            const sxTarget = state.generals[(ctx.shengxiTargetIndex as number) ?? -1]
+            const sxLost = (ctx.shengxiCount as number) ?? 0
+            if (sxTarget?.alive && !isEnemy(state, sxTarget, playerId)
+                && (sxTarget.hp <= 2 || sxLost <= 2)) return 'confirm'
+            return 'decline'
+        }
+        case 'jiangwan_jing_shoucheng': {
+            const scTarget = state.generals[(ctx.shouchengTargetIndex as number) ?? -1]
+            return scTarget?.alive && !isEnemy(state, scTarget, playerId) ? 'confirm' : 'decline'
+        }
         case 'guohuanghou_jiaozhao_declare': {
             const owner = state.generals[(ctx.jiaozhaoOwnerIndex as number) ?? -1]
             const friendly = !!owner && !isEnemy(state, owner, playerId)
@@ -4708,12 +5389,20 @@ function pickSkillOptionRaw(
                 const foeInRange = state.generals.some((g) =>
                     g.alive && isEnemy(state, g, playerId)
                     && getAttackRange(owner, g, state.generals).inRange)
+                const chainedFoe = state.generals.some(g => g.alive && g.chained
+                    && isEnemy(state, g, playerId))
+                const vineFoe = state.generals.some(g => g.alive && isEnemy(state, g, playerId)
+                    && g.equip?.armor?.name === EquipmentCardName.VINE)
                 if (lostHp > 0 && has('peach') && !owner.hand.some(isPeach)) return 'peach'
+                if (has('fire_slash') && (vineFoe || chainedFoe)) return 'fire_slash'
+                if (has('thunder_slash') && chainedFoe) return 'thunder_slash'
                 if (foeInRange && has('attack')) return 'attack'
                 if (has('draw_two')) return 'draw_two'
                 if (foeInRange && has('dismantle')) return 'dismantle'
-                if (has('wine')) return 'wine'
-                return options[0]?.action ?? 'attack'
+                if (has('wine') && owner.hand.some(isSlash)) return 'wine'
+                if (lostHp > 0 && has('peach')) return 'peach'
+                if (foeInRange && has('duel')) return 'duel'
+                return has('decline') ? 'decline' : (options[0]?.action ?? 'attack')
             }
             if (friendly) {
                 if (has('dodge')) return 'dodge'
@@ -4734,18 +5423,23 @@ function pickSkillOptionRaw(
             if (has('loseHp') && (self?.hp ?? 1) > 1) return 'loseHp'
             return has('discard') ? 'discard' : 'loseHp'
         }
+        case 'caoxiu_jie_qingxi_use': {
+            const qxIdx = (ctx.qingxiTargetIndices as number[]) ?? []
+            const qxFoes = qxIdx.map(i => state.generals[i]).filter(g => g?.alive && isEnemy(state, g, playerId))
+            if (qxFoes.length === 0) return 'decline'
+            if (!ctx.qingxiHasWeapon) return 'activate'
+            // 有武器：两项都执行，代价是弃置武器
+            const weapon = self?.equip?.weapon
+            const weakWeapon = !weapon || keepValue(weapon) <= 60
+            const lethal = qxFoes.some(g => g.hp <= 1)
+            return weakWeapon || lethal ? 'activate' : 'decline'
+        }
         case 'caoxiu_jie_qingxi': {
             const qxTarget = state.generals[(ctx.qingxiJieTargetIndex as number) ?? -1]
-            if (has('both')) {
-                // 有武器：两项都执行但会弃置武器，武器不值钱或能斩杀时才发动
-                const weapon = self?.equip?.weapon
-                const weakWeapon = !weapon || keepValue(weapon) <= 60
-                const lethal = !!qxTarget && qxTarget.hp <= ((ctx.qingxiAmount as number) ?? 1) + 1
-                return weakWeapon || lethal ? 'both' : 'decline'
-            }
+            if (has('both')) return 'both'
             const need = Math.max(1, (ctx.qingxiCount as number) ?? 1)
             const canDiscard = !!qxTarget && qxTarget.hand.length >= need
-            const lethal = !!qxTarget && qxTarget.hp <= ((ctx.qingxiAmount as number) ?? 1) + 1
+            const lethal = !!qxTarget && qxTarget.hp <= 1
             if (has('damage') && (lethal || !canDiscard)) return 'damage'
             return has('discard') ? 'discard' : 'damage'
         }
@@ -4950,7 +5644,13 @@ export function aiAct(state: GameState, playerId: string = AI_PLAYER_ID): boolea
             savingNegate: commanderLow || myNegates <= 1,
         })
         const dc = beginDecision(state, playerId, 'negate', { under_threat: commanderLow })
-        const negateThreshold = thresholdFor(dc, 'NEGATE_THRESHOLD', 55)
+        const negateThreshold = thresholdFor(dc, 'NEGATE_THRESHOLD', NEGATE_THRESHOLD)
+        // 与 PASS_SCORE 同一口径：门槛真的改变了「用不用无懈」才算生效。
+        // 只记录读阈值会把「该不该救」的分歧算进来，A/B 的生效次数就没有意义。
+        if (dc && negateOwner && negateThreshold !== NEGATE_THRESHOLD
+            && (negateValue >= NEGATE_THRESHOLD) !== (negateValue >= negateThreshold)) {
+            noteThresholdDecision('NEGATE_THRESHOLD')
+        }
         const shouldNegate = !!negateOwner && negateValue >= negateThreshold
         if (negateOwner && shouldNegate) {
             const card = negateOwner.g.hand.find(

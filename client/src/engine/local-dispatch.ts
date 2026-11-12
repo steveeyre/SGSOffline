@@ -11,29 +11,45 @@ import {
     GamePhase,
     GameState,
     ResponseType,
+    SkillLimitRule,
     TurnPhase,
 } from 'sgs3v3-shared'
 import { useGameStore } from '../store/gameStore'
 import {
     checkAndOpenNegateWindow,
+    exportJianmieColors,
     handleNegateRespond,
     handleRespond,
     handleUseCard,
     handleUseSkill,
+    importJianmieColors,
     negateWindowTimeout,
     processAutoExecutePending,
     syncCardState,
 } from './game-actions'
 import { addLog, checkGameOver, toClientView } from './game-state'
-import { aiRespond, aiAct, describeOption, takeDraftTraces, takePlayTrace, takeSkillTrace } from './local-ai'
+import { exportMemory, importMemory, knownHand, poolView, type MemoryEntry } from './ai-memory'
+import { KEY_CARD_COUNTS } from './deck-meta'
+import { getGeneralById } from './generals'
+import { aiRespond, aiAct, describeOption, listPlayOptions, takeDraftTraces, takePlayTrace, takeSkillTrace } from './local-ai'
 import { AI_PLAYER_ID, HUMAN_PLAYER_ID, createLocalMatch, currentPickFaction, handlePickYield, localDeployGenerals, localPickGeneral } from './local-match'
 import { chooseActionUnit, handleDiscard, handleEndTurn, handleYieldChoice, resumeStalledTurn } from './turn-manager'
-import { getRandomSeed } from './rng'
-import { beginMatchLog, captureSnapshot, finishMatchLog, recordDecision, recordMatchAction, type DecisionSnapshot } from './match-log'
+import { getRandomCursor, getRandomSeed, setRandomCursor, setRandomSeed } from './rng'
+import {
+    beginMatchLog, captureSnapshot, exportCurrentMatchLog, finishMatchLog, recordDecision, recordMatchAction,
+    resumeMatchLog, type DecisionSnapshot, type MatchLogRecord,
+} from './match-log'
 import { aiLandlordDraft } from '../modes/FightTheLandlord/landlord-draft'
-import { createLandlordMatch, landlordPickGeneral, setupLandlordPlay, type LandlordSide } from '../modes/FightTheLandlord/landlord-match'
-import { createPairMatch, pairPickGeneral, setupPairPlay } from '../modes/HappyPair/pair-match'
+import {
+    createLandlordMatch, landlordConfirmPick, landlordPickGeneral, landlordPointPick,
+    setupLandlordPlay, type LandlordSide,
+} from '../modes/FightTheLandlord/landlord-match'
+import {
+    createPairMatch, pairConfirmPick, pairPickGeneral, pairPointPick, setupPairPlay,
+} from '../modes/HappyPair/pair-match'
 import { aiPairDraft } from '../modes/HappyPair/pair-draft'
+import { pairSeatsOf } from '../modes/HappyPair/pair-draft'
+import { readStorageItem, removeStorageItem } from './storage-keys'
 
 let activeGame: GameState | null = null
 /** 斗地主：本地玩家执哪一方（统率三军为 null） */
@@ -77,8 +93,8 @@ function deployFactionFor(state: GameState, ids: string[]): Faction {
     return Faction.WARM
 }
 
-/** AI 每步之间的停顿（毫秒）；0 表示瞬时结算 */
-let paceMs = 320
+/** AI 每步之间的停顿（毫秒）：正常 700（看清每一步）、快速 320（原有速度） */
+let paceMs = 700
 let stepTimer: ReturnType<typeof setTimeout> | null = null
 let paceToken = 0
 
@@ -111,12 +127,101 @@ export function getLocalSeed(): number | null {
     return activeGame ? getRandomSeed() : null
 }
 
-export function startLocalMatch(humanFaction: Faction, seed?: number): void {
+export interface CardCountStat {
+    key: keyof typeof KEY_CARD_COUNTS
+    label: string
+    /** 还没露面、仍可能在牌堆或敌方手里的张数 */
+    left: number
+    /** 已经使用/弃置的张数（仅四大基础牌统计） */
+    played: number
+}
+
+const POOL_LABELS: Array<[keyof typeof KEY_CARD_COUNTS, string]> = [
+    ['slash', '杀'],
+    ['dodge', '闪'],
+    ['peach', '桃'],
+    ['negate', '无懈可击'],
+    ['wine', '酒'],
+    ['duel', '决斗'],
+    ['fire_attack', '火攻'],
+    ['harvest', '五谷丰登'],
+    ['arrows', '万箭齐发'],
+    ['barbarians', '南蛮入侵'],
+    ['peach_garden', '桃园结义'],
+    ['overindulgence', '乐不思蜀'],
+    ['supply_shortage', '兵粮寸断'],
+    ['crossbow', '诸葛连弩'],
+]
+
+const PLAYED_KINDS = new Set(['slash', 'dodge', 'peach', 'negate'])
+
+/** 教练提示：与规则 AI 共用同一张决策表，只列候选不执行 */
+export interface CoachSuggestion {
+    key: string
+    label: string
+    score: number
+    gain: number
+    risk: number
+    strategic: number
+    turnValue: number
+}
+
+/** 当前出牌阶段 AI 会怎么打：取分数最高的前几个候选，不改变局面 */
+export function getCoachSuggestions(): CoachSuggestion[] {
+    const state = activeGame
+    if (!state || state.phase !== GamePhase.PLAYING) return []
+    if (state.turnPhase !== TurnPhase.ACTION || state.negateWindow) return []
+    if (state.pendingResponseQueue.length > 0) return []
+    const active = state.generals[state.activeGeneralIndex]
+    if (!active || active.playerId !== HUMAN_PLAYER_ID) return []
+    return listPlayOptions(state, HUMAN_PLAYER_ID)
+        .map((option) => ({ ...option, label: describeOption(option.key) }))
+        .sort((a, b) => b.turnValue - a.turnValue || b.score - a.score)
+        .slice(0, 6)
+}
+
+/** 记牌器：只汇总公开信息（弃牌堆、装备/判定区、己方手牌、亮过的明牌） */
+export interface PoolStats {
+    unseen: number
+    seen: number
+    hidden: number
+    cards: CardCountStat[]
+    enemies: Array<{ name: string; hand: number; known: number }>
+}
+
+export function getPoolStats(): PoolStats | null {
+    const state = activeGame
+    if (!state) return null
+    const pool = poolView(state, HUMAN_PLAYER_ID)
+    const faction = state.players[HUMAN_PLAYER_ID]?.faction
+    return {
+        unseen: pool.unseen,
+        seen: pool.seenCount,
+        hidden: pool.hiddenCount,
+        cards: POOL_LABELS.map(([key, label]) => ({
+            key,
+            label,
+            left: pool.left(key),
+            played: PLAYED_KINDS.has(key)
+                ? pool.played(key as 'slash' | 'dodge' | 'peach' | 'negate')
+                : 0,
+        })),
+        enemies: state.generals
+            .filter((g) => g.alive && g.faction !== faction)
+            .map((g) => ({
+                name: getGeneralById(g.generalId)?.name ?? g.generalId,
+                hand: g.hand.length,
+                known: knownHand(state, state.generals.indexOf(g)).length,
+            })),
+    }
+}
+
+export function startLocalMatch(humanFaction: Faction, seed?: number, skillLimitRule?: SkillLimitRule, weaponEnhance?: boolean): void {
     hotseatMode = false
     activeLandlordSide = null
     activePairSide = null
-    activeGame = createLocalMatch(humanFaction, seed)
-    beginMatchLog(activeGame, getRandomSeed(), 'classic')
+    activeGame = createLocalMatch(humanFaction, seed, false, undefined, skillLimitRule, weaponEnhance)
+    beginMatchLog(activeGame, getRandomSeed(), 'classic', { humanFaction })
     const store = useGameStore.getState()
     store.setMode(GameMode.CLASSIC)
     store.setLandlordSide(null)
@@ -134,12 +239,12 @@ export function startLocalMatch(humanFaction: Faction, seed?: number): void {
 }
 
 /** 左右手对弈：暖方 HUMAN_PLAYER_ID、冷方 HUMAN2_PLAYER_ID，同屏两方都由本地玩家操作 */
-export function startLocalHotseatMatch(seed?: number): void {
+export function startLocalHotseatMatch(seed?: number, skillLimitRule?: SkillLimitRule, weaponEnhance?: boolean): void {
     hotseatMode = true
     activeLandlordSide = null
     activePairSide = null
-    activeGame = createLocalMatch(Faction.WARM, seed, true)
-    beginMatchLog(activeGame, getRandomSeed(), 'hotseat')
+    activeGame = createLocalMatch(Faction.WARM, seed, true, undefined, skillLimitRule, weaponEnhance)
+    beginMatchLog(activeGame, getRandomSeed(), 'hotseat', { hotseat: true })
     const store = useGameStore.getState()
     store.setMode(GameMode.CLASSIC)
     store.setLandlordSide(null)
@@ -157,12 +262,15 @@ export function startLocalHotseatMatch(seed?: number): void {
 }
 
 /** 斗地主：本地玩家执地主或农民（两个农民同屏控制） */
-export function startLocalLandlordMatch(side: LandlordSide, seed?: number): void {
+export function startLocalLandlordMatch(side: LandlordSide, seed?: number, oddityMode = false, skillLimitRule?: SkillLimitRule, weaponEnhance?: boolean): void {
     hotseatMode = false
     activeLandlordSide = side
     activePairSide = null
-    activeGame = createLandlordMatch(side, seed)
-    beginMatchLog(activeGame, getRandomSeed(), 'doudizhu')
+    // 玩家先选将，AI 等人类席位全部确定后再补
+    activeGame = createLandlordMatch(side, seed, false, oddityMode, skillLimitRule, weaponEnhance)
+    beginMatchLog(activeGame, getRandomSeed(), 'doudizhu', {
+        humanFaction: side === 'landlord' ? Faction.WARM : Faction.COOL,
+    })
     const store = useGameStore.getState()
     store.setHotseat(false)
     store.setHotseatViews(null)
@@ -180,12 +288,13 @@ export function startLocalLandlordMatch(side: LandlordSide, seed?: number): void
 }
 
 /** 欢乐成双：本地玩家执冷色（1、4 号位）或暖色（2、3 号位） */
-export function startLocalPairMatch(side: Faction, seed?: number): void {
+export function startLocalPairMatch(side: Faction, seed?: number, oddityMode = false, skillLimitRule?: SkillLimitRule, weaponEnhance?: boolean): void {
     hotseatMode = false
     activeLandlordSide = null
     activePairSide = side
-    activeGame = createPairMatch(side, seed)
-    beginMatchLog(activeGame, getRandomSeed(), 'huanle_shuang')
+    // 玩家先选将，AI 等人类席位全部确定后再补
+    activeGame = createPairMatch(side, seed, false, oddityMode, skillLimitRule, weaponEnhance)
+    beginMatchLog(activeGame, getRandomSeed(), 'huanle_shuang', { humanFaction: side })
     const store = useGameStore.getState()
     store.setHotseat(false)
     store.setHotseatViews(null)
@@ -202,6 +311,25 @@ export function startLocalPairMatch(side: Faction, seed?: number): void {
     publish()
 }
 
+/** 人类席位是否已全部选好武将（奇技模式下奇技也要选） */
+function pairHumanDraftDone(state: GameState): boolean {
+    const pick = state.pairPick
+    const side = state.pairHumanSide
+    if (!pick || !side) return false
+    const seats = pairSeatsOf(side)
+    if (!seats.every((i) => pick.picked[i] !== null)) return false
+    return !pick.oddityPicked || seats.every((i) => pick.oddityPicked![i] !== null)
+}
+
+function landlordHumanDraftDone(state: GameState): boolean {
+    const pick = state.landlordPick
+    if (!pick) return false
+    const side = state.landlordHumanSide ?? 'landlord'
+    const seats = [0, 1, 2].filter((i) => (i === 0 ? side === 'landlord' : side === 'farmers'))
+    if (!seats.every((i) => pick.picked[i] !== null)) return false
+    return !pick.oddityPicked || seats.every((i) => pick.oddityPicked![i] !== null)
+}
+
 /** 欢乐成双选将：人类点选自己阵营座位的武将（AI 席位由模型或规则 AI 补齐） */
 export function dispatchLocalPairPick(seat: number, generalId: string): void {
     const state = activeGame
@@ -210,7 +338,65 @@ export function dispatchLocalPairPick(seat: number, generalId: string): void {
     const decisionSnapshot = captureSnapshot(state)
     const result = pairPickGeneral(state, seat, generalId)
     if ('error' in result) return useGameStore.getState().setError(result.error)
+    // 人类席位选完后再让 AI 补，避免 AI 抢先占走玩家想点将的武将
+    if (pairHumanDraftDone(state)) aiPairDraft(state, () => setupPairPlay(state))
     // 规则 AI 补齐的选将轨迹记进对局日志
+    recordAiDecision(state, decisionSnapshot, logFrom)
+    useGameStore.getState().setError(null)
+    publish()
+}
+
+/** 欢乐成双奇技模式：武将与奇技一并确认 */
+export function dispatchLocalPairConfirmPick(seat: number, generalId: string, oddityId: string): void {
+    const state = activeGame
+    if (!state) return
+    const logFrom = state.log.length
+    const decisionSnapshot = captureSnapshot(state)
+    const result = pairConfirmPick(state, seat, generalId, oddityId)
+    if ('error' in result) return useGameStore.getState().setError(result.error)
+    if (pairHumanDraftDone(state)) aiPairDraft(state, () => setupPairPlay(state))
+    recordAiDecision(state, decisionSnapshot, logFrom)
+    useGameStore.getState().setError(null)
+    publish()
+}
+
+/** 欢乐成双点将：从模式全池任选武将（奇技模式下与奇技一并提交） */
+export function dispatchLocalPairPointPick(seat: number, generalId: string, oddityId?: string): void {
+    const state = activeGame
+    if (!state) return
+    const logFrom = state.log.length
+    const decisionSnapshot = captureSnapshot(state)
+    const result = pairPointPick(state, seat, generalId, oddityId)
+    if ('error' in result) return useGameStore.getState().setError(result.error)
+    if (pairHumanDraftDone(state)) aiPairDraft(state, () => setupPairPlay(state))
+    recordAiDecision(state, decisionSnapshot, logFrom)
+    useGameStore.getState().setError(null)
+    publish()
+}
+
+/** 斗地主点将：从模式全池任选武将（奇技模式下与奇技一并提交） */
+export function dispatchLocalLandlordPointPick(poolIndex: number, generalId: string, oddityId?: string): void {
+    const state = activeGame
+    if (!state) return
+    const result = landlordPointPick(state, poolIndex, generalId, oddityId)
+    if ('error' in result) return useGameStore.getState().setError(result.error)
+    const logFrom = state.log.length
+    const decisionSnapshot = captureSnapshot(state)
+    if (landlordHumanDraftDone(state)) aiLandlordDraft(state, () => setupLandlordPlay(state))
+    recordAiDecision(state, decisionSnapshot, logFrom)
+    useGameStore.getState().setError(null)
+    publish()
+}
+
+/** 斗地主奇技模式：武将与奇技一并确认 */
+export function dispatchLocalLandlordConfirmPick(poolIndex: number, generalId: string, oddityId: string): void {
+    const state = activeGame
+    if (!state) return
+    const result = landlordConfirmPick(state, poolIndex, generalId, oddityId)
+    if ('error' in result) return useGameStore.getState().setError(result.error)
+    const logFrom = state.log.length
+    const decisionSnapshot = captureSnapshot(state)
+    if (landlordHumanDraftDone(state)) aiLandlordDraft(state, () => setupLandlordPlay(state))
     recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
     publish()
@@ -222,10 +408,10 @@ export function dispatchLocalLandlordPick(poolIndex: number, generalId: string):
     if (!state) return
     const result = landlordPickGeneral(state, poolIndex, generalId)
     if ('error' in result) return useGameStore.getState().setError(result.error)
-    // AI 一方即时补齐（三方同时选）
+    // 人类席位选完后再让 AI 补齐
     const logFrom = state.log.length
     const decisionSnapshot = captureSnapshot(state)
-    aiLandlordDraft(state, () => {})
+    if (landlordHumanDraftDone(state)) aiLandlordDraft(state, () => setupLandlordPlay(state))
     recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
     publish()
@@ -234,6 +420,7 @@ export function dispatchLocalLandlordPick(poolIndex: number, generalId: string):
 export function exitLocalMatch(): void {
     stopPacing()
     finishMatchLog()
+    clearResumeSave()
     activeGame = null
     hotseatMode = false
     activeLandlordSide = null
@@ -338,16 +525,51 @@ export function dispatchLocalSurrender(): void {
     store.setWinnerFaction(winner)
     store.setGameState(toClientView(state, HUMAN_PLAYER_ID))
     finishMatchLog(winner)
+    clearResumeSave()
 }
 
 /** 单机重开：保留当前模式与阵营，重新开始一局 */
 export function dispatchLocalRestart(): void {
-    if (hotseatMode) return startLocalHotseatMatch()
-    if (activeLandlordSide) return startLocalLandlordMatch(activeLandlordSide)
-    if (activePairSide) return startLocalPairMatch(activePairSide)
-    const faction = activeGame?.players[HUMAN_PLAYER_ID]?.faction
+    rematchLocalMatch()
+}
+
+export interface LocalRematchOptions {
+    /** 指定种子可复现同一局；留空则开新种子 */
+    seed?: number
+    /** 交换玩家阵营（斗地主的地主/农民、冷暖方互换） */
+    swapSide?: boolean
+}
+
+/** 按当前对局的模式、奇技与阵营重开一局 */
+export function rematchLocalMatch(opts: LocalRematchOptions = {}): void {
+    const state = activeGame
+    const oddity = state?.oddityMode ?? false
+    const skillLimitRule = state?.skillLimitRule
+    const weaponEnhance = state?.weaponEnhance
+    if (hotseatMode) {
+        startLocalHotseatMatch(opts.seed, skillLimitRule, weaponEnhance)
+        return
+    }
+    if (activeLandlordSide) {
+        const side: LandlordSide = opts.swapSide
+            ? (activeLandlordSide === 'landlord' ? 'farmers' : 'landlord')
+            : activeLandlordSide
+        startLocalLandlordMatch(side, opts.seed, oddity, skillLimitRule, weaponEnhance)
+        return
+    }
+    if (activePairSide) {
+        const side = opts.swapSide
+            ? (activePairSide === Faction.WARM ? Faction.COOL : Faction.WARM)
+            : activePairSide
+        startLocalPairMatch(side, opts.seed, oddity, skillLimitRule, weaponEnhance)
+        return
+    }
+    const faction = state?.players[HUMAN_PLAYER_ID]?.faction
     if (!faction) return
-    startLocalMatch(faction)
+    const nextFaction = opts.swapSide
+        ? (faction === Faction.WARM ? Faction.COOL : Faction.WARM)
+        : faction
+    startLocalMatch(nextFaction, opts.seed, skillLimitRule, weaponEnhance)
 }
 
 /** 斗地主 / 欢乐成双的 AI 席位没有推进循环兜底，局面停在选将时要由规则 AI 补齐 */
@@ -409,6 +631,11 @@ function reveal(state: GameState): void {
     // 回合管理里“从武将牌上取回牌”等变化不会经过动作包装函数，这里补一次检测
     syncCardState(state)
     finishIfOver(state)
+    pushViewToStore(state)
+    scheduleResumeSave()
+}
+
+function pushViewToStore(state: GameState): void {
     const store = useGameStore.getState()
     if (!hotseatMode) {
         store.setGameState(toClientView(state, HUMAN_PLAYER_ID))
@@ -443,6 +670,7 @@ function finishIfOver(state: GameState): boolean {
     state.phase = GamePhase.GAME_OVER
     useGameStore.getState().setWinnerFaction(over.winnerFaction ?? null)
     finishMatchLog(over.winnerFaction ?? null)
+    clearResumeSave()
     return true
 }
 
@@ -694,6 +922,186 @@ function pendingKey(p: GameState['pendingResponseQueue'][number] | undefined): s
     if (!p) return ''
     const ctx = (p.context ?? {}) as any
     return `${p.type}#${p.targetGeneralIndex}#${ctx.dyingGeneralIndex ?? ''}`
+}
+
+/**
+ * 断点续局：每次结算后把完整局面（含随机游标与对局记录）写进 localStorage。
+ * 关页面/刷新后从大厅的「继续上次对局」接着打，序号与随机序列都和存档时一致。
+ */
+export const RESUME_KEY = 'sgsoffline.resumeMatch.v1'
+const RESUME_VERSION = 1
+
+export interface ResumeSave {
+    version: number
+    savedAt: number
+    seed: number
+    cursor: number
+    mode: GameMode
+    hotseat: boolean
+    landlordSide: LandlordSide | null
+    pairSide: Faction | null
+    humanFaction: Faction | null
+    matchLog: MatchLogRecord | null
+    /** AI 的公开明牌记忆：不随存档接回的话，读档后 AI 会“忘牌” */
+    aiMemory: MemoryEntry[]
+    /** 翦灭先选方的暂存颜色（另一方还没选时存在） */
+    jianmieColors: Array<[number, string]>
+    state: GameState
+}
+
+/** 大厅展示用：只带够判断“要不要继续”的摘要 */
+export interface ResumeInfo {
+    mode: GameMode
+    hotseat: boolean
+    phase: GamePhase
+    round: number
+    savedAt: number
+}
+
+function resumeStorage(): Storage | null {
+    try {
+        return typeof localStorage !== 'undefined' ? localStorage : null
+    } catch {
+        return null
+    }
+}
+
+function readResumeSave(): ResumeSave | null {
+    const store = resumeStorage()
+    if (!store) return null
+    try {
+        const raw = readStorageItem(store, RESUME_KEY)
+        if (!raw) return null
+        const parsed = JSON.parse(raw) as ResumeSave
+        if (parsed?.version !== RESUME_VERSION || !parsed.state) return null
+        return parsed
+    } catch {
+        return null
+    }
+}
+
+let resumeSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearResumeSave(): void {
+    if (resumeSaveTimer !== null) {
+        clearTimeout(resumeSaveTimer)
+        resumeSaveTimer = null
+    }
+    const store = resumeStorage()
+    if (store) removeStorageItem(store, RESUME_KEY)
+}
+
+function flushResumeSave(): void {
+    if (resumeSaveTimer !== null) {
+        clearTimeout(resumeSaveTimer)
+        resumeSaveTimer = null
+    }
+    const state = activeGame
+    const store = resumeStorage()
+    if (!state || !store) return
+    if (state.phase === GamePhase.GAME_OVER) {
+        removeStorageItem(store, RESUME_KEY)
+        return
+    }
+    const save: ResumeSave = {
+        version: RESUME_VERSION,
+        savedAt: Date.now(),
+        seed: getRandomSeed(),
+        cursor: getRandomCursor(),
+        mode: state.mode ?? GameMode.CLASSIC,
+        hotseat: hotseatMode,
+        landlordSide: activeLandlordSide,
+        pairSide: activePairSide,
+        humanFaction: state.players[HUMAN_PLAYER_ID]?.faction ?? null,
+        matchLog: exportCurrentMatchLog(),
+        aiMemory: exportMemory(state),
+        jianmieColors: exportJianmieColors(state),
+        state,
+    }
+    try {
+        store.setItem(RESUME_KEY, JSON.stringify(save))
+    } catch {
+        // 超出配额就放弃，不能因为存档影响对局
+    }
+}
+
+function scheduleResumeSave(): void {
+    if (!activeGame || activeGame.phase === GamePhase.GAME_OVER) return
+    if (resumeSaveTimer !== null) return
+    // 连续结算时合并写入，避免每一帧都整局序列化
+    resumeSaveTimer = setTimeout(flushResumeSave, 250)
+}
+
+if (typeof window !== 'undefined') {
+    // 关标签页/切后台时立刻落盘，避免最后一次节流写入被丢掉
+    window.addEventListener('beforeunload', flushResumeSave)
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flushResumeSave()
+    })
+}
+
+/** 有没有可继续的对局 */
+export function hasResumeSave(): boolean {
+    const save = readResumeSave()
+    return !!save && save.state.phase !== GamePhase.GAME_OVER
+}
+
+/** 大厅「继续上次对局」按钮的摘要；没有存档时返回 null */
+export function getResumeInfo(): ResumeInfo | null {
+    const save = readResumeSave()
+    if (!save || save.state.phase === GamePhase.GAME_OVER) return null
+    return {
+        mode: save.mode,
+        hotseat: save.hotseat,
+        phase: save.state.phase,
+        round: save.state.roundState?.roundNumber ?? 0,
+        savedAt: save.savedAt,
+    }
+}
+
+/** 从存档恢复对局；成功返回 true */
+export function resumeLocalMatch(): boolean {
+    const save = readResumeSave()
+    if (!save) return false
+    if (save.state.phase === GamePhase.GAME_OVER) {
+        clearResumeSave()
+        return false
+    }
+    stopPacing()
+    activeGame = save.state
+    hotseatMode = save.hotseat
+    activeLandlordSide = save.landlordSide
+    activePairSide = save.pairSide
+    // 种子固定、游标续接：恢复后的摸牌与 AI 决策和存档时完全一致
+    setRandomSeed(save.seed)
+    setRandomCursor(save.cursor)
+    resumeMatchLog(save.matchLog)
+    // 记忆与暂存色一起接回，读档后 AI 不会突然“忘掉”已亮的牌或翦灭颜色
+    importMemory(save.state, save.aiMemory)
+    importJianmieColors(save.state, save.jianmieColors)
+
+    const store = useGameStore.getState()
+    store.setMode(save.mode)
+    store.setLandlordSide(save.landlordSide)
+    store.setHotseat(save.hotseat)
+    store.setHotseatViews(null)
+    store.setPlayerId(HUMAN_PLAYER_ID)
+    store.setNickname(nicknameForResume(save))
+    store.setRoomCode('local')
+    store.setMyFaction(save.humanFaction ?? Faction.WARM)
+    store.setIsSpectator(false)
+    store.setWinnerFaction(null)
+    store.setError(null)
+    store.clearSelection()
+    publish()
+    return true
+}
+
+function nicknameForResume(save: ResumeSave): string {
+    if (save.hotseat) return '暖方'
+    if (save.mode === GameMode.DOUDIZHU) return save.landlordSide === 'farmers' ? '农民' : '地主'
+    if (save.mode === GameMode.HUANLE_SHUANG) return save.humanFaction === Faction.COOL ? '冷方' : '暖方'
+    return '我'
 }
 
 function snapshot(state: GameState): string {

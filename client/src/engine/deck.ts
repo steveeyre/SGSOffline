@@ -1,5 +1,6 @@
 import { GameState } from 'sgs3v3-shared'
 import { shuffleInPlace } from './rng'
+import { noteDeckDraws } from './combat-stats'
 
 /** 牌堆用尽时把弃牌堆洗回牌堆；返回牌堆是否有牌可摸/可判 */
 export function ensureDeck(state: GameState): boolean {
@@ -17,5 +18,6 @@ export function drawCards(state: GameState, count: number) {
         if (!ensureDeck(state)) break
         drawn.push(state.deck.shift()!)
     }
+    noteDeckDraws(state, drawn)
     return drawn
 }

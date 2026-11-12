@@ -32,10 +32,10 @@ const RULES: TendencyRule[] = [
         // 菜刀：杀是回合内资源，没杀时连输出都没有
         skills: [
             'zhangfei_paoxiao', 'zhangfei_tishen', 'guanyu_wusheng', 'lvbu_wushuang',
-            'lvbu_jing_zhanshen', 'machao_tieqi', 'machao_jie_tieqi', 'xuchu_luoyi',
+            'lvbu_jing_zhanshen', 'machao_tieqi', 'machao_jie_tieqi', 'xuchu_jie_luoyi',
             'dianwei_jie_qiangxi', 'fuwan_moukui', 'huangzhong_liegong', 'zhangxiu_xiongluan',
             'quyi_jiaozi', 'taishici_hanzhan', 'caoxiu_jie_qingxi', 'dingfeng_duanbing',
-            'lingcao_dufeng', 'madai_qianxi', 'zhoucang_zhongyong',
+            'lingcao_dufeng', 'madai_qianxi', 'zhoucang_zhongyong', 'zhoucang_jie_zhongyong',
         ],
         weight: { slash: 1.35, dodge: 0.9 },
     },
@@ -48,7 +48,7 @@ const RULES: TendencyRule[] = [
         // 卖血/受击收益：需要留闪桃保证自己不死，才吃得到收益
         skills: [
             'guojia_yiji', 'guojia_jie_yiji', 'caocao_jianxiong', 'caocao_jie_jianxiong',
-            'xiahoudun_ganglie', 'xiahoudun_jing_ganglie', 'sunce_jiang',
+            'xiahoudun_ganglie', 'xiahoudun_jing_ganglie', 'sunce_jiang', 'sunce_jie_jiang',
         ],
         weight: { dodge: 1.15, peach: 1.15 },
     },

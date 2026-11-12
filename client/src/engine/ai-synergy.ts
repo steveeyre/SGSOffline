@@ -28,7 +28,7 @@ export function cardFit(g: GeneralView | undefined, card: Card | undefined): num
     let fit = 0
     if (SLASH_NAMES.includes(card.name)) {
         if (has('zhangfei_paoxiao') || has('guanyu_wusheng') || has('lvbu_wushuang') ||
-            has('machao_tieqi') || has('machao_jie_tieqi') || has('xuchu_luoyi') ||
+            has('machao_tieqi') || has('machao_jie_tieqi') || has('xuchu_jie_luoyi') ||
             has('dianwei_jie_qiangxi') || has('fuwan_moukui')) fit += 2
     }
     if (card.name === BasicCardName.DODGE) {
@@ -88,7 +88,7 @@ export function damageBackfire(g: GeneralView | undefined): number {
     if (has('caocao_jianxiong') || has('caocao_jie_jianxiong')) backfire += 8
     if (has('simayi_fankui') || has('simayi_jie_fankui')) backfire += 8
     if (has('xiahoudun_ganglie') || has('xiahoudun_jing_ganglie')) backfire += 10
-    if (has('sunce_jiang')) backfire += 4
+    if (has('sunce_jiang') || has('sunce_jie_jiang')) backfire += 4
     return backfire
 }
 
