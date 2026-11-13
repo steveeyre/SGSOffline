@@ -366,6 +366,22 @@ export interface GeneralInstance {
     /** 椎锋：技能失效的回合序号（本阶段） */
     zhuifengDisabledTurn?: number
 
+    // ── 新增武将状态位：田畴 / 高览 / 崔琰 / 张翼（均可选） ──
+    /** 善刀（田畴）：本阶段是否已发动 */
+    shandaoUsedPhase?: boolean
+    /** 峻攻（高览）：本阶段此前的发动次数（X = 次数 + 1） */
+    jungongCount?: number
+    /** 峻攻（高览）：本次视为使用的【杀】牌 id，造成伤害后令技能失效 */
+    jungongSlashId?: string
+    /** 峻攻（高览）：技能失效的回合序号（造成伤害后失效至本回合结束） */
+    jungongDisabledTurn?: number
+    /** 雅俊（崔琰）：本阶段是否已发动②（出牌阶段开始的拼点） */
+    cuiyanYajunUsedPhase?: boolean
+    /** 尊嫡（崔琰）：本阶段是否已发动 */
+    zundiUsedPhase?: boolean
+    /** 执义（张翼）：已询问过的回合序号，避免同一结束阶段重复询问 */
+    yiyiTurn?: number
+
     // ── 洛书版第二批武将状态位（均可选） ──
     /** 怀橘（陆绩）：持有“橘”标记数 */
     orangeMarks?: number

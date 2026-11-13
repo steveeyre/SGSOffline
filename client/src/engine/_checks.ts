@@ -4767,6 +4767,313 @@ console.log('[文鸯]')
     check('椎锋：失效后再用被拒', !!again && 'error' in again, again)
 }
 
+console.log('[新增武将：田畴 / 高览 / 崔琰 / 张翼]')
+
+/** 场上所有区域的牌数（善刀/峻攻等的牌数守恒断言用） */
+const tableCardCount = (s: any): number => {
+    let n = s.deck.length + s.discard.length + (s.harvestPool?.length ?? 0)
+    for (const g of s.generals) {
+        n += g.hand.length + g.judgeZone.length
+        n += Object.values(g.equip ?? {}).filter(Boolean).length
+        n += g.generalPile?.length ?? 0
+    }
+    return n
+}
+
+{
+    // 善刀（田畴）：取被选角色的各一张牌置顶 → 对这些角色五谷丰登 → 对其余角色万箭齐发
+    const s = build(['tianchou', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 910)
+    s.turnSerial = 1
+    const tc = s.generals[3]
+    const xy = s.generals[0]
+    const gy = s.generals[1]
+    const mc = s.generals[2]
+    tc.hand = [card('tc1', BasicCardName.ATTACK, CardSuit.SPADE, 7)]
+    xy.hand = [card('xy1', BasicCardName.DODGE, CardSuit.HEART, 2), card('xy2', BasicCardName.PEACH, CardSuit.HEART, 3)]
+    gy.hand = [card('gy1', BasicCardName.WINE, CardSuit.DIAMOND, 9)]
+    mc.hand = [card('mc1', BasicCardName.ATTACK, CardSuit.CLUB, 6)]
+    s.deck = Array.from({ length: 12 }, (_, i) => card('sd' + i, BasicCardName.DODGE, CardSuit.HEART, (i % 9) + 1))
+    const before = tableCardCount(s)
+    const res = handleUseSkill(s, HUMAN_PLAYER_ID, { skillId: 'tianchou_shandao', targetIndices: [0] } as any)
+    check('善刀：可以发动', !(res && 'error' in res), res)
+    check('善刀：本阶段已使用过', tc.shandaoUsedPhase === true, tc.shandaoUsedPhase)
+    check('善刀：被选角色少了一张牌', xy.hand.length === 1, xy.hand.map(c => c.id))
+    const again = handleUseSkill(s, HUMAN_PLAYER_ID, { skillId: 'tianchou_shandao', targetIndices: [1] } as any)
+    check('善刀：本阶段再发动被拒', !!(again && 'error' in again), again)
+    check('善刀：先结算五谷丰登',
+        s.pendingResponseQueue[0]?.type === ResponseType.HARVEST_PICK
+        && s.pendingResponseQueue[0].targetGeneralIndex === 0, queue(s))
+    const arrows = s.pendingResponseQueue
+        .filter(p => p.type === ResponseType.AOE_DODGE)
+        .map(p => p.targetGeneralIndex)
+        .sort()
+    check('善刀：万箭齐发目标为除被选角色外的其他存活角色（不含田畴）',
+        JSON.stringify(arrows) === JSON.stringify([1, 2, 4, 5]), arrows)
+    check('善刀：牌数守恒', tableCardCount(s) === before, `${before} -> ${tableCardCount(s)}`)
+    const harvestId = s.harvestPool?.[0]?.id
+    handleRespond(s, AI_PLAYER_ID, { cardId: harvestId } as any)
+    check('善刀：五谷丰登的牌进入目标手牌',
+        !!harvestId && xy.hand.some(c => c.id === harvestId), xy.hand.map(c => c.id))
+    let guard = 0
+    while (s.pendingResponseQueue.length > 0 && guard++ < 12) {
+        const head = s.pendingResponseQueue[0]
+        const who = s.generals[head.targetGeneralIndex]
+        handleRespond(s, who.playerId, { action: 'decline' } as any)
+    }
+    check('善刀：万箭齐发造成伤害', gy.hp === gy.maxHp - 1, `${gy.hp}/${gy.maxHp}`)
+    check('善刀：两次结算后牌数仍守恒', tableCardCount(s) === before, `${before} -> ${tableCardCount(s)}`)
+}
+
+{
+    // 峻攻（高览）：X = 本阶段发动次数 + 1；造成伤害后本回合失效
+    const s = build(['huatuo', 'sunquan', 'machao'], ['gaolan', 'xiahouyuan', 'guanyu'], 911)
+    s.activeGeneralIndex = 0
+    s.activePlayerFaction = Faction.COOL
+    s.turnSerial = 1
+    const gl = s.generals[0]
+    gl.hp = 4
+    gl.hand = [card('jg1', BasicCardName.DODGE, CardSuit.HEART, 2), card('jg2', BasicCardName.PEACH, CardSuit.HEART, 3)]
+    const r1 = handleUseSkill(s, AI_PLAYER_ID, { skillId: 'gaolan_jungong' } as any)
+    check('峻攻：可以发动', !(r1 && 'error' in r1), r1)
+    const costPend = findPending(s, 'gaolan_jungong')
+    const costOpts = ((costPend?.context as any)?.options ?? []) as { action: string }[]
+    check('峻攻：X=1 时询问代价',
+        (costPend?.context as any)?.jungongCost === 1
+        && costOpts.some(o => o.action === 'discard') && costOpts.some(o => o.action === 'loseHp'),
+        costOpts.map(o => o.action))
+    handleRespond(s, AI_PLAYER_ID, { action: 'discard' } as any)
+    const pickPend = findPending(s, 'gaolan_jungong_discard')
+    check('峻攻：弃牌分支需要选 1 张', (pickPend?.context as any)?.count === 1, queue(s))
+    handleRespond(s, AI_PLAYER_ID, { cardIds: ['jg1'] } as any)
+    check('峻攻：弃牌后选择【杀】目标', !!findPending(s, 'gaolan_jungong_target'), queue(s))
+    handleRespond(s, AI_PLAYER_ID, { targetIndex: 3 } as any)
+    check('峻攻：本阶段发动次数 +1', (gl.jungongCount ?? 0) === 1, gl.jungongCount)
+    check('峻攻：造成伤害前技能未失效', gl.jungongDisabledTurn === undefined, gl.jungongDisabledTurn)
+    handleRespond(s, HUMAN_PLAYER_ID, {} as any)
+    check('峻攻：此【杀】造成伤害后本回合失效', gl.jungongDisabledTurn === 1, gl.jungongDisabledTurn)
+    const r2 = handleUseSkill(s, AI_PLAYER_ID, { skillId: 'gaolan_jungong' } as any)
+    check('峻攻：失效后再用被拒', !!(r2 && 'error' in r2), r2)
+}
+
+{
+    // 峻攻：X 递增（出闪则技能不失效，可继续发动）
+    const s = build(['huatuo', 'sunquan', 'machao'], ['gaolan', 'xiahouyuan', 'guanyu'], 912)
+    s.activeGeneralIndex = 0
+    s.activePlayerFaction = Faction.COOL
+    s.turnSerial = 2
+    const gl = s.generals[0]
+    const ht = s.generals[3]
+    gl.hp = 4
+    gl.hand = [card('jk1', BasicCardName.DODGE, CardSuit.HEART, 4), card('jk2', BasicCardName.PEACH, CardSuit.HEART, 5)]
+    ht.hand = [card('jk3', BasicCardName.DODGE, CardSuit.DIAMOND, 6)]
+    ht.hp = 3
+    handleUseSkill(s, AI_PLAYER_ID, { skillId: 'gaolan_jungong' } as any)
+    handleRespond(s, AI_PLAYER_ID, { action: 'loseHp' } as any)
+    check('峻攻：失去体力分支（X=1）', gl.hp === 3, gl.hp)
+    handleRespond(s, AI_PLAYER_ID, { targetIndex: 3 } as any)
+    handleRespond(s, HUMAN_PLAYER_ID, { cardId: 'jk3' } as any)
+    check('峻攻：出闪则本回合不失效', gl.jungongDisabledTurn === undefined, gl.jungongDisabledTurn)
+    handleUseSkill(s, AI_PLAYER_ID, { skillId: 'gaolan_jungong' } as any)
+    const costPend2 = findPending(s, 'gaolan_jungong')
+    check('峻攻：第二次发动 X=2', (costPend2?.context as any)?.jungongCost === 2,
+        (costPend2?.context as any)?.jungongCost)
+}
+
+{
+    // 等力（高览）：体力值相等时使用【杀】指定目标 / 成为【杀】目标都可摸一张
+    const s = build(['gaolan', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 913)
+    s.turnSerial = 1
+    const gl = s.generals[3]
+    const xy = s.generals[0]
+    gl.hp = 4
+    xy.hp = 4
+    gl.equip.weapon = card('dl_bow', EquipmentCardName.KYLIN_BOW, CardSuit.SPADE, 5,
+        CardCategory.EQUIPMENT, { attackRange: 5 })
+    gl.hand = [card('dl1', BasicCardName.ATTACK, CardSuit.SPADE, 8)]
+    handleUseCard(s, HUMAN_PLAYER_ID, { cardId: 'dl1', targetIndices: [0] } as any)
+    check('等力：使用【杀】且体力相等时询问', !!findPending(s, 'gaolan_dengli'), queue(s))
+    const dlHandBefore = gl.hand.length
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'confirm' } as any)
+    check('等力：摸一张牌', gl.hand.length === dlHandBefore + 1, gl.hand.length)
+
+    const s2 = build(['gaolan', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 914)
+    const gl2 = s2.generals[3]
+    gl2.hp = 3
+    s2.generals[0].hp = 4
+    gl2.equip.weapon = card('dl_bow2', EquipmentCardName.KYLIN_BOW, CardSuit.SPADE, 5,
+        CardCategory.EQUIPMENT, { attackRange: 5 })
+    gl2.hand = [card('dl2', BasicCardName.ATTACK, CardSuit.SPADE, 9)]
+    handleUseCard(s2, HUMAN_PLAYER_ID, { cardId: 'dl2', targetIndices: [0] } as any)
+    check('等力：体力值不相等不询问', !findPending(s2, 'gaolan_dengli'), queue(s2))
+
+    const s3 = build(['gaolan', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 915)
+    s3.activeGeneralIndex = 0
+    s3.activePlayerFaction = Faction.COOL
+    const gl3 = s3.generals[3]
+    gl3.hp = 4
+    s3.generals[0].hp = 4
+    s3.generals[0].equip.weapon = card('dl_bow3', EquipmentCardName.KYLIN_BOW, CardSuit.SPADE, 5,
+        CardCategory.EQUIPMENT, { attackRange: 5 })
+    s3.generals[0].hand = [card('dl3', BasicCardName.ATTACK, CardSuit.SPADE, 10)]
+    handleUseCard(s3, AI_PLAYER_ID, { cardId: 'dl3', targetIndices: [3] } as any)
+    const hisSlash = findPending(s3, 'gaolan_dengli')
+    check('等力：成为其他角色【杀】的目标时由高览确认',
+        !!hisSlash && hisSlash.targetGeneralIndex === 3, queue(s3))
+}
+
+{
+    // 雅俊①（崔琰）：摸牌阶段多摸一张牌
+    const s = build(['cuiyan', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 916)
+    const cy = s.generals[3]
+    cy.hand = []
+    s.deck = Array.from({ length: 12 }, (_, i) => card('yj' + i, BasicCardName.DODGE, CardSuit.HEART, 3))
+    finishJudgePhaseAndContinue(s, cy, false, false)
+    check('雅俊①：摸牌阶段多摸一张（3 张）', cy.hand.length === 3, cy.hand.length)
+    const s2 = build(['huatuo', 'sunquan', 'machao'], ['xiahouyuan', 'guanyu', 'zhenji'], 917)
+    const ht2 = s2.generals[3]
+    ht2.hand = []
+    s2.deck = Array.from({ length: 12 }, (_, i) => card('yj2_' + i, BasicCardName.DODGE, CardSuit.HEART, 3))
+    finishJudgePhaseAndContinue(s2, ht2, false, false)
+    check('雅俊①：对照组只摸两张', ht2.hand.length === 2, ht2.hand.length)
+}
+
+{
+    // 雅俊②：出牌阶段开始时用本回合获得的牌拼点；赢则可把拼点牌置于牌堆顶
+    const s = build(['cuiyan', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 918)
+    s.turnSerial = 3
+    const cy = s.generals[3]
+    const ht = s.generals[4]
+    cy.hand = [card('cy_k', BasicCardName.ATTACK, CardSuit.SPADE, 13), card('cy_2', BasicCardName.DODGE, CardSuit.HEART, 2)]
+    cy.gainedCardIdsThisTurn = ['cy_k']
+    ht.hand = [card('ht_2', BasicCardName.ATTACK, CardSuit.CLUB, 2)]
+    s.deck = Array.from({ length: 8 }, (_, i) => card('pin' + i, BasicCardName.DODGE, CardSuit.HEART, 4))
+    beginActionPhase(s, cy)
+    const yjPend = findPending(s, 'cuiyan_yajun')
+    check('雅俊②：出牌阶段开始时询问拼点', !!yjPend, queue(s))
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'confirm' } as any)
+    check('雅俊②：选择拼点对象', !!findPending(s, 'cuiyan_yajun_target'), queue(s))
+    handleRespond(s, HUMAN_PLAYER_ID, { targetIndex: 4 } as any)
+    const pinPick = s.pendingResponseQueue[0]
+    check('雅俊②：进入选拼点牌', pinPick?.type === ResponseType.SKILL_PICK_CARD
+        && (pinPick.context as any)?.mode === 'pindian', queue(s))
+    const badPick = handleRespond(s, HUMAN_PLAYER_ID, { cardId: 'cy_2' } as any)
+    check('雅俊②：非本回合获得的牌被拒', !!(badPick && 'error' in badPick), badPick)
+    handleRespond(s, HUMAN_PLAYER_ID, { cardId: 'cy_k' } as any)
+    handleRespond(s, HUMAN_PLAYER_ID, { cardId: 'ht_2' } as any)
+    const placePend = findPending(s, 'cuiyan_yajun_place')
+    check('雅俊②：拼点赢后可选择一张拼点牌置顶', !!placePend, queue(s))
+    const deckBefore = s.deck.length
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'place:cy_k' } as any)
+    check('雅俊②：拼点牌置于牌堆顶', s.deck[0]?.id === 'cy_k' && s.deck.length === deckBefore + 1,
+        s.deck[0]?.id)
+
+    // 没赢：本回合手牌上限 -1
+    const s2 = build(['cuiyan', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 919)
+    s2.turnSerial = 4
+    const cy2 = s2.generals[3]
+    const ht2 = s2.generals[4]
+    cy2.hand = [card('cy2_small', BasicCardName.ATTACK, CardSuit.SPADE, 2)]
+    cy2.gainedCardIdsThisTurn = ['cy2_small']
+    ht2.hand = [card('ht2_big', BasicCardName.ATTACK, CardSuit.CLUB, 13)]
+    beginActionPhase(s2, cy2)
+    handleRespond(s2, HUMAN_PLAYER_ID, { action: 'confirm' } as any)
+    handleRespond(s2, HUMAN_PLAYER_ID, { targetIndex: 4 } as any)
+    handleRespond(s2, HUMAN_PLAYER_ID, { cardId: 'cy2_small' } as any)
+    handleRespond(s2, HUMAN_PLAYER_ID, { cardId: 'ht2_big' } as any)
+    check('雅俊②：拼点没赢则本回合手牌上限-1', (cy2.handLimitDelta ?? 0) === -1, cy2.handLimitDelta)
+}
+
+{
+    // 尊嫡（崔琰）：判定黑色 → 目标摸三张牌
+    const s = build(['cuiyan', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 920)
+    s.turnSerial = 5
+    const cy = s.generals[3]
+    const xy = s.generals[0]
+    cy.hand = [card('zd1', BasicCardName.DODGE, CardSuit.CLUB, 2), card('zd2', BasicCardName.ATTACK, CardSuit.SPADE, 7)]
+    s.deck = [
+        card('jd_black', BasicCardName.ATTACK, CardSuit.SPADE, 5),
+        ...Array.from({ length: 8 }, (_, i) => card('zd_deck' + i, BasicCardName.DODGE, CardSuit.HEART, 4)),
+    ]
+    const zres = handleUseSkill(s, HUMAN_PLAYER_ID, { skillId: 'cuiyan_zundi', targetIndices: [0], cardIds: ['zd1'] } as any)
+    check('尊嫡：可以发动', !(zres && 'error' in zres), zres)
+    check('尊嫡：本阶段已使用过', cy.zundiUsedPhase === true, cy.zundiUsedPhase)
+    check('尊嫡：判定黑色时目标摸三张牌', xy.hand.length === 3, xy.hand.length)
+    check('尊嫡：判定黑色不产生移动询问', !findPending(s, 'cuiyan_zundi_move'), queue(s))
+
+    // 尊嫡：判定红色 → 目标可以移动场上的一张牌
+    const s2 = build(['cuiyan', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 921)
+    s2.turnSerial = 6
+    const cy2 = s2.generals[3]
+    const xy2 = s2.generals[0]
+    const mc2 = s2.generals[2]
+    cy2.hand = [card('zd3', BasicCardName.DODGE, CardSuit.CLUB, 3)]
+    s2.deck = [
+        card('jd_red', BasicCardName.PEACH, CardSuit.HEART, 9),
+        ...Array.from({ length: 8 }, (_, i) => card('zd_deck2_' + i, BasicCardName.DODGE, CardSuit.HEART, 4)),
+    ]
+    mc2.equip.weapon = card('zd_eq', EquipmentCardName.KYLIN_BOW, CardSuit.SPADE, 5,
+        CardCategory.EQUIPMENT, { attackRange: 5 })
+    handleUseSkill(s2, HUMAN_PLAYER_ID, { skillId: 'cuiyan_zundi', targetIndices: [0], cardIds: ['zd3'] } as any)
+    const movePend = findPending(s2, 'cuiyan_zundi_move')
+    check('尊嫡：判定红色时目标可以移动场上的一张牌',
+        !!movePend && movePend.targetGeneralIndex === 0, queue(s2))
+    handleRespond(s2, AI_PLAYER_ID, { action: 'confirm' } as any)
+    check('尊嫡：选择装备来源', !!findPending(s2, 'cuiyan_zundi_move_src'), queue(s2))
+    handleRespond(s2, AI_PLAYER_ID, { targetIndex: 2 } as any)
+    check('尊嫡：选择装备获得者', !!findPending(s2, 'cuiyan_zundi_move_dst'), queue(s2))
+    handleRespond(s2, AI_PLAYER_ID, { targetIndex: 0 } as any)
+    check('尊嫡：装备牌已移动到目标装备区',
+        s2.generals[0].equip.weapon?.id === 'zd_eq' && !mc2.equip.weapon,
+        s2.generals[0].equip.weapon?.id)
+    check('尊嫡：目标没有额外摸牌', xy2.hand.length === 0, xy2.hand.length)
+}
+
+{
+    // 执义（张翼）：结束阶段选择视为使用本回合用过的基本牌
+    const s = build(['zhangyi', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 930)
+    s.turnPhase = TurnPhase.TURN_END
+    s.pendingResponseQueue = []
+    const zy = s.generals[3]
+    const gy = s.generals[1]
+    zy.hand = []
+    zy.hp = 4
+    zy.equip.weapon = card('zy_bow', EquipmentCardName.KYLIN_BOW, CardSuit.SPADE, 5,
+        CardCategory.EQUIPMENT, { attackRange: 5 })
+    zy.basicUsedThisTurn = [BasicCardName.ATTACK]
+    s.deck = Array.from({ length: 8 }, (_, i) => card('yy' + i, BasicCardName.DODGE, CardSuit.HEART, 3))
+    finishTurn(s)
+    const yiyiPend = findPending(s, 'zhangyi_yiyi')
+    const yiyiOpts = ((yiyiPend?.context as any)?.options ?? []) as { action: string }[]
+    check('执义：任意角色结束阶段会询问', !!yiyiPend, queue(s))
+    check('执义：选项 1 可选择本回合用过的基本牌',
+        yiyiOpts.some(o => o.action === 'use:attack'), yiyiOpts.map(o => o.action))
+    check('执义：选项 2 摸一张牌', yiyiOpts.some(o => o.action === 'draw'), yiyiOpts.map(o => o.action))
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'use:attack' } as any)
+    check('执义：视为使用【杀】须选择目标', !!findPending(s, 'zhangyi_yiyi_target'), queue(s))
+    handleRespond(s, HUMAN_PLAYER_ID, { targetIndex: 1 } as any)
+    check('执义：视为使用的【杀】进入响应', s.pendingResponseQueue.some(p => p.type === ResponseType.DODGE),
+        queue(s))
+    handleRespond(s, AI_PLAYER_ID, {} as any)
+    check('执义：视为使用的【杀】造成伤害', gy.hp === gy.maxHp - 1, `${gy.hp}/${gy.maxHp}`)
+
+    // 执义：选择摸一张牌
+    const s2 = build(['zhangyi', 'huatuo', 'sunquan'], ['xiahouyuan', 'guanyu', 'machao'], 931)
+    s2.turnPhase = TurnPhase.TURN_END
+    s2.pendingResponseQueue = []
+    const zy2 = s2.generals[3]
+    zy2.hand = []
+    zy2.basicUsedThisTurn = [BasicCardName.DODGE]
+    s2.deck = Array.from({ length: 8 }, (_, i) => card('yy2_' + i, BasicCardName.DODGE, CardSuit.HEART, 3))
+    finishTurn(s2)
+    const yiyiPend2 = findPending(s2, 'zhangyi_yiyi')
+    const yiyiOpts2 = ((yiyiPend2?.context as any)?.options ?? []) as { action: string }[]
+    check('执义：只记录到【闪】时没有可视为使用的基本牌',
+        !yiyiOpts2.some(o => o.action.startsWith('use:')), yiyiOpts2.map(o => o.action))
+    const zy2HandBefore = zy2.hand.length
+    handleRespond(s2, HUMAN_PLAYER_ID, { action: 'draw' } as any)
+    check('执义：选择摸一张牌', zy2.hand.length === zy2HandBefore + 1, zy2.hand.length)
+}
+
 console.log('[本地对战：欢乐成双 / 斗地主]')
 {
     const s = createPairMatch(Faction.WARM, 901, false, false, undefined, undefined, true)

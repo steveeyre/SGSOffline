@@ -3592,6 +3592,56 @@ export const GENERALS: GeneralDefinition[] = [
             },
         ],
     },
+    {
+        id: 'tianchou', name: '田畴', maxHp: 3, gender: 'male', kingdom: 'qun',
+        skills: [
+            {
+                id: 'tianchou_shandao', name: '善刀',
+                description: '出牌阶段限一次，你可以将任意名角色的各一张牌置于牌堆顶，视为对这些角色使用一张【五谷丰登】，然后视为对除这些角色外的其他角色使用一张【万箭齐发】。',
+                type: SkillType.ACTIVE, trigger: SkillTrigger.ACTIVE,
+            },
+        ],
+    },
+    {
+        id: 'gaolan', name: '高览', maxHp: 4, gender: 'male', kingdom: 'wei',
+        skills: [
+            {
+                id: 'gaolan_jungong', name: '峻攻',
+                description: '出牌阶段，你可以弃置X张牌或者失去X点体力，视为使用一张无距离次数限制的【杀】（X为你本阶段此前发动过此技能的次数+1），然后当此【杀】造成伤害后，此技能失效直至本回合结束。',
+                type: SkillType.ACTIVE, trigger: SkillTrigger.ACTIVE,
+            },
+            {
+                id: 'gaolan_dengli', name: '等力',
+                description: '当你使用【杀】指定一名角色为目标时，或当你成为其他角色使用【杀】的目标时，若你与其体力值相等，你可以摸一张牌。',
+                type: SkillType.PASSIVE, trigger: SkillTrigger.ON_USED_AS_TARGET,
+            },
+        ],
+    },
+    {
+        id: 'cuiyan', name: '崔琰', maxHp: 3, gender: 'male', kingdom: 'wei',
+        skills: [
+            {
+                id: 'cuiyan_yajun', name: '雅俊',
+                description: '①摸牌阶段，你多摸一张牌；②出牌阶段开始时，你可以用一张本回合获得的牌与一名其他角色拼点，若你赢，你可以将其中一张拼点牌置于牌堆顶；若你没赢，你本回合的手牌上限-1。',
+                type: SkillType.PASSIVE, trigger: SkillTrigger.ON_DRAW_CARDS,
+            },
+            {
+                id: 'cuiyan_zundi', name: '尊嫡',
+                description: '出牌阶段限一次，你可以弃置一张手牌并选择一名角色，然后你进行一次判定，若结果为：黑色，其摸三张牌；红色，其可以移动场上的一张牌。',
+                type: SkillType.ACTIVE, trigger: SkillTrigger.ACTIVE,
+            },
+        ],
+    },
+    {
+        id: 'zhangyi', name: '张翼', maxHp: 4, gender: 'male', kingdom: 'shu',
+        skills: [
+            {
+                id: 'zhangyi_yiyi', name: '执义',
+                description: '锁定技，一名角色的结束阶段，若你本回合使用或打出过基本牌，你选择一项：1.视为使用任意一张你本回合使用或打出过的基本牌；2.摸一张牌。',
+                type: SkillType.LOCKED, trigger: SkillTrigger.ON_TURN_END,
+            },
+        ],
+    },
 ]
 
 /** 觉醒/转化获得、但未挂在武将原生技能列表里的技能（仅用于展示与查询） */
@@ -3772,6 +3822,7 @@ export const BRAWL_POOL_IDS: string[] = [
     'kanze', 'shenlusu', 'baoxin', 'xizhicai', 'liuxie',
     'xuhuang_xing', 'dengzhi', 'maliang', 'guanping', 'xushu', 'luzhi',
     'mazhong', 'xushao',
+    'cuiyan', 'tianchou',
     // 牌差（36）
     'lidian_jie', 'wangji', 'sunquan_jing', 'lingtong_jie', 'huangyueying_jie', 'wangping',
     'zhenji_jie', 'huangquan_jing', 'sunjian_jie', 'zhouyu_jie', 'sunqian_jie', 'zumao',
@@ -3787,7 +3838,7 @@ export const BRAWL_POOL_IDS: string[] = [
     'lisu', 'caozhang_jie', 'shamoke', 'caochun',
     'zhangmancheng', 'caoxing', 'dongcheng',
     'zhaoyun_sp', 'machao_sp', 'jiangwei_mou',
-    'wenyang',
+    'wenyang', 'gaolan',
     // 直伤（24）
     'dianwei_jie', 'huanggai_jie', 'yuejin', 'zhugeke', 'zhangjiao_jie', 'jiaxu_jie',
     'diaochan_jie', 'caifuren_jie', 'liuchen', 'huaxiong_jie', 'cenhun', 'guanyinping',
@@ -3807,6 +3858,7 @@ export const BRAWL_POOL_IDS: string[] = [
     'sunce_jie', 'luji', 'dongzhuo', 'zhonghui_jie', 'zhangchunhua_jie', 'caochong_jie',
     'panjun',
     'yujin_mou', 'zhoutai',
+    'zhangyi',
     // 回复（10）
     'zhaoyun_jing', 'shenzhaoyun', 'shanzhaoyun', 'huatuo_jie', 'sunshangxiang_jie', 'chengpu_jie',
     'mizhu', 'caiwenji_sp', 'jiangwan_jing',

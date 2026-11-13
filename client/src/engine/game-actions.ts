@@ -985,7 +985,7 @@ function processAutoExecutePendingImpl(state: GameState): void {
  * - eight_trigrams: 八卦阵
  * - leiji: 雷击（张角）——判定牌归属被指定的角色
  */
-export type SkillJudgeType = 'ganglie' | 'tieqi' | 'tieqi_jie' | 'luoshen' | 'eight_trigrams' | 'leiji' | 'leiji_jie' | 'huituo' | 'chouce' | 'beige' | 'weifu' | 'keshou'
+export type SkillJudgeType = 'ganglie' | 'tieqi' | 'tieqi_jie' | 'luoshen' | 'eight_trigrams' | 'leiji' | 'leiji_jie' | 'huituo' | 'chouce' | 'beige' | 'weifu' | 'keshou' | 'zundi'
 
 /**
  * 执行一次技能判定：翻牌 → 检查鬼才/缓释 → 结算或等待介入
@@ -1354,6 +1354,38 @@ export function resolveSkillJudge(
                     })
                 }
                 addLog(state, `【${name}】【筹策】判定红色：令一名角色摸一张牌`)
+            }
+            checkTiandu(state, judgingGeneral, judgeCard)
+            break
+        }
+        case 'zundi': {
+            // 尊嫡（崔琰）：判定黑色（♠♣）目标摸三张牌；红色（♥♦）目标可以移动场上的一张牌
+            const zdIdx = extraContext.zundiTargetIndex as number | undefined
+            const zdTarget = zdIdx !== undefined ? state.generals[zdIdx] : undefined
+            const zdBlack = judgeCard.suit === CardSuit.SPADE || judgeCard.suit === CardSuit.CLUB
+            if (zdBlack) {
+                if (zdTarget?.alive) {
+                    const zdDrawn = drawForGeneral(state, zdTarget, 3)
+                    zdTarget.hand.push(...zdDrawn)
+                    addLog(state, `【${name}】【尊嫡】判定${cardFullName(judgeCard)}（黑色），【${getGeneralName(zdTarget)}】摸${zdDrawn.length}张牌`)
+                } else {
+                    addLog(state, `【${name}】【尊嫡】判定${cardFullName(judgeCard)}（黑色），但目标已不在场`)
+                }
+            } else if (!zdTarget?.alive) {
+                addLog(state, `【${name}】【尊嫡】判定${cardFullName(judgeCard)}（红色），但目标已不在场`)
+            } else if (!state.generals.some(g => g.alive && Object.values(g.equip).some(Boolean))) {
+                addLog(state, `【${name}】【尊嫡】判定${cardFullName(judgeCard)}（红色），场上没有可移动的装备牌`)
+            } else {
+                addLog(state, `【${name}】【尊嫡】判定${cardFullName(judgeCard)}（红色），【${getGeneralName(zdTarget)}】可以移动场上的一张牌`)
+                state.pendingResponseQueue.unshift({
+                    type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                    targetGeneralIndex: zdIdx!,
+                    context: {
+                        skillId: 'cuiyan_zundi_move',
+                        skillName: '尊嫡',
+                        description: '判定为红色：你可以移动场上的一张牌',
+                    },
+                })
             }
             checkTiandu(state, judgingGeneral, judgeCard)
             break
@@ -3191,6 +3223,35 @@ function maybeWenyangQuedi(
     addLog(state, `【${getGeneralName(general)}】可发动【却敌】`)
 }
 
+/**
+ * 等力（高览）：使用【杀】指定目标时 / 成为其他角色【杀】的目标时，
+ * 若双方体力值相等，可摸一张牌。两个时机逐目标询问。
+ */
+function maybeDengliTriggers(
+    state: GameState,
+    attacker: GeneralInstance,
+    targets: GeneralInstance[],
+): void {
+    const attackerIdx = indexOfGeneral(state, attacker)
+    for (const target of targets) {
+        if (!target || target === attacker || !target.alive) continue
+        if (target.hp !== attacker.hp) continue
+        const targetIdx = indexOfGeneral(state, target)
+        // 使用【杀】的一方
+        if (hasSkill(attacker, 'gaolan_dengli')) {
+            askSkill(state, attacker, 'gaolan_dengli', '等力',
+                `你与【${getGeneralName(target)}】体力值相等（${attacker.hp}）：摸一张牌`,
+                { dengliTargetIndex: targetIdx, dengliFromSlash: true })
+        }
+        // 成为【杀】目标的一方
+        if (hasSkill(target, 'gaolan_dengli')) {
+            askSkill(state, target, 'gaolan_dengli', '等力',
+                `你成为【${getGeneralName(attacker)}】的【杀】目标，双方体力值相等（${target.hp}）：摸一张牌`,
+                { dengliTargetIndex: attackerIdx, dengliAsTarget: true })
+        }
+    }
+}
+
 export function dealDamage(
     state: GameState,
     attacker: GeneralInstance | null,
@@ -3570,6 +3631,13 @@ export function dealDamage(
         target.handLimitPenalty = (target.handLimitPenalty ?? 0) + 1
         target.liushiPenalty = (target.liushiPenalty ?? 0) + 1
         addLog(state, `【${getGeneralName(target)}】因【流矢】手牌上限-1（累计-${target.liushiPenalty}）`)
+    }
+
+    // ── 峻攻（高览）：此【杀】造成伤害后，此技能失效直至本回合结束
+    if (amount > 0 && attacker && damageCardId && attacker.jungongSlashId === damageCardId) {
+        attacker.jungongSlashId = undefined
+        attacker.jungongDisabledTurn = state.turnSerial
+        addLog(state, `【${getGeneralName(attacker)}】【峻攻】的【杀】造成伤害，此技能失效直至本回合结束`)
     }
 
     if (amount > 0) {
@@ -5944,6 +6012,8 @@ function handleBasicCard(
         maybeJieQingxiOnUse(state, general, card, targets)
         // 却敌（文鸯）：使用【杀】指定唯一目标后（放在 DODGE 之前询问）
         if (targets.length === 1) maybeWenyangQuedi(state, general, card.id, targets[0], 'slash')
+        // 等力（高览）：使用【杀】指定目标时，体力值相等可摸一张牌
+        maybeDengliTriggers(state, general, targets)
 
         // 谏征（秦宓）/ 龙临（闪赵云）：须先于【闪】结算，故在整个目标循环之后入队
         triggerJianzheng(state, general, card, targets)
@@ -6160,6 +6230,8 @@ function handleWushengAttack(
     maybeJieQingxiOnUse(state, general, card, targets)
     // 却敌（文鸯）：使用【杀】指定唯一目标后（放在 DODGE 之前询问）
     if (targets.length === 1) maybeWenyangQuedi(state, general, card.id, targets[0], 'slash')
+    // 等力（高览）：使用【杀】指定目标时，体力值相等可摸一张牌
+    maybeDengliTriggers(state, general, targets)
     return
 }
 
@@ -7070,6 +7142,11 @@ function handleUseSkillImpl(
     if (isBatchActiveSkill(data.skillId)) {
         const batchResult = handleBatchActiveSkill(state, general, data)
         if (batchResult !== BATCH_UNHANDLED) return batchResult
+    }
+    // 新增武将（田畴 / 高览 / 崔琰）的主动技能
+    if (isNewActiveSkill(data.skillId)) {
+        const newSkillResult = handleNewActiveSkill(state, general, data)
+        if (newSkillResult !== NEW_SKILL_UNHANDLED) return newSkillResult
     }
 
     // 限一次检查工具
@@ -11512,6 +11589,9 @@ function handleRespondImpl(state: GameState, playerId: string, data: C2S_Respond
     // 洛书版第十批：新增武将的技能响应
     const batchResponse = handleBatchResponse(state, targetGeneral, pending, data)
     if (batchResponse !== BATCH_UNHANDLED) return batchResponse
+    // 新增武将（田畴 / 高览 / 崔琰 / 张翼）的技能响应
+    const newSkillResponse = handleNewSkillResponse(state, targetGeneral, pending, data)
+    if (newSkillResponse !== NEW_SKILL_UNHANDLED) return newSkillResponse
     if (data.action === "zhenshan") {
         const zsResult = applyZhenshanResponse(state, targetGeneral, pending, data);
         if (zsResult) return zsResult;
@@ -16047,6 +16127,7 @@ function handleRespondImpl(state: GameState, playerId: string, data: C2S_Respond
             state.pendingResponseQueue.shift()
             if (playedCard) {
                 noteExpansionCardUsed(state, targetGeneral, playedCard, [], undefined, true)
+                markPlayedBasic(targetGeneral, playedCard)
                 // 冲阵（SP赵云）：以【龙胆】将【杀】当【闪】打出后
                 if (playedCard.name === BasicCardName.ATTACK) {
                     triggerChongzhen(state, targetGeneral, playedCard, ctx.sourceGeneralIndex)
@@ -16102,6 +16183,7 @@ function handleRespondImpl(state: GameState, playerId: string, data: C2S_Respond
             state.pendingResponseQueue.shift()
             if (playedCard) {
                 noteExpansionCardUsed(state, targetGeneral, playedCard, [], undefined, true)
+                markPlayedBasic(targetGeneral, playedCard)
                 // 冲阵（SP赵云）：以【龙胆】将【闪】当【杀】打出后
                 if (playedCard.name === BasicCardName.DODGE) {
                     triggerChongzhen(state, targetGeneral, playedCard, ctx.sourceGeneralIndex)
@@ -16299,6 +16381,7 @@ function handleRespondImpl(state: GameState, playerId: string, data: C2S_Respond
                 state.discard.push(card)
                 checkMingzhe(state, targetGeneral, card)
                 recoverHp(state, dyingGeneral, 1); if (dyingGeneral.hp > 0) triggerJuejing(state, dyingGeneral, 'leave')
+                markBasicUsed(targetGeneral, isWineSave ? BasicCardName.WINE : BasicCardName.PEACH)
                 addLog(state, `【${getGeneralName(targetGeneral)}】${lhHeartSave && card.name !== BasicCardName.PEACH
                     ? `发动【龙魂】，将${cardFullName(card)}当【桃】使用` : `使用【${isWineSave ? '酒' : '桃'}】`}，【${getGeneralName(dyingGeneral)}】回复至 ${dyingGeneral.hp}/${dyingGeneral.maxHp}`)
                 if (dyingGeneral.hp > 0) {
@@ -19368,6 +19451,7 @@ function handleDodgeResponse(
         }
         // 蒺藜（沙摩柯）：打出【闪】同样计入“使用或打出”的张数
         noteExpansionCardUsed(state, targetGeneral, card, [], undefined, true)
+        markPlayedBasic(targetGeneral, card)
         // 冲阵（SP赵云）：以【龙胆】将【杀】当【闪】打出后
         if (card.name === BasicCardName.ATTACK) {
             triggerChongzhen(state, targetGeneral, card, ctx.attackerGeneralIndex)
@@ -19871,6 +19955,7 @@ function handleDuelResponse(
     }
     if (playedSlash) {
         noteExpansionCardUsed(state, targetGeneral, playedSlash, [], undefined, true)
+        markPlayedBasic(targetGeneral, playedSlash)
         // 冲阵（SP赵云）：以【龙胆】将【闪】当【杀】打出后
         if (playedSlash.name === BasicCardName.DODGE) {
             triggerChongzhen(state, targetGeneral, playedSlash, opponentIdx)
@@ -20360,10 +20445,35 @@ function resolvePindian(state: GameState, initiatorCard: Card, opponentCard?: Ca
             }
             break
         }
+        // 雅俊②（崔琰）：赢则可将其中一张拼点牌置于牌堆顶；没赢则本回合手牌上限-1
+        case 'cuiyan_yajun': {
+            if (!won) {
+                initiator.handLimitDelta = (initiator.handLimitDelta ?? 0) - 1
+                addLog(state, `【${getGeneralName(initiator)}】【雅俊】拼点没赢，本回合手牌上限-1（${initiator.handLimitDelta}）`)
+                break
+            }
+            addLog(state, `【${getGeneralName(initiator)}】【雅俊】拼点赢，可以将其中一张拼点牌置于牌堆顶`)
+            const placeOptions = [
+                { action: `place:${initiatorCard.id}`, label: `将你的拼点牌${cardFullName(initiatorCard)}置于牌堆顶` },
+                ...(opponentCard
+                    ? [{ action: `place:${opponentCard.id}`, label: `将对方的拼点牌${cardFullName(opponentCard)}置于牌堆顶` }]
+                    : []),
+                { action: 'decline', label: '不放置' },
+            ]
+            state.pendingResponseQueue.push({
+                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                targetGeneralIndex: pin.initiatorIndex,
+                context: {
+                    skillId: 'cuiyan_yajun_place', skillName: '雅俊',
+                    description: '可以将其中一张拼点牌置于牌堆顶',
+                    options: placeOptions,
+                },
+            })
+            break
+        }
         default:
             break
     }
-
     // 纵适（界简雍）：赢则获得点数较小的一张拼点牌，没赢则收回自己的拼点牌
     if (hasSkill(initiator, 'jianyong_zongshi')) {
         const zsPick = won
@@ -20545,7 +20655,7 @@ function useVirtualSlash(
     state: GameState,
     source: GeneralInstance,
     targetIndex: number,
-    opts: { noRange?: boolean; unavoidable?: boolean; label?: string; nature?: 'normal' | 'fire' | 'thunder'; liushi?: boolean; ignoreArmor?: boolean } = {},
+    opts: { noRange?: boolean; unavoidable?: boolean; label?: string; nature?: 'normal' | 'fire' | 'thunder'; liushi?: boolean; ignoreArmor?: boolean; noLimit?: boolean; onCreated?: (card: Card) => void } = {},
 ): { error: string } | void {
     const target = state.generals[targetIndex]
     const label = opts.label ?? ''
@@ -20567,6 +20677,9 @@ function useVirtualSlash(
     if (opts.unavoidable) (vc as any).unavoidable = true
     if (opts.noRange) (vc as any).noRange = true
     if (opts.ignoreArmor) (vc as any).ignoreArmor = true
+    // 无次数限制（峻攻等）
+    if (opts.noLimit) (vc as any).noAttackLimit = true
+    if (opts.onCreated) opts.onCreated(vc)
     if (opts.liushi) {
         // 流矢（曹性）：伤害成立时目标手牌上限-1，用虚拟牌 id 在 dealDamage 里挂钩
         ;(vc as any).liushi = true
@@ -21142,6 +21255,12 @@ function autoPindian(state: GameState, initiator: GeneralInstance, opponent: Gen
 function markBasicUsed(general: GeneralInstance, name: string): void {
     const used = general.basicUsedThisTurn ?? []
     if (!used.includes(name)) general.basicUsedThisTurn = [...used, name]
+}
+
+/** 记录“打出”的基本牌（执义：本回合使用或打出过的基本牌也能被复用） */
+function markPlayedBasic(general: GeneralInstance, card: Card): void {
+    if (card.category !== CardCategory.BASIC) return
+    markBasicUsed(general, String(card.name))
 }
 
 /** 节命（界荀彧）：令其摸X张（X为其体力上限，至多5），然后手牌弃置至X张 */
@@ -24837,3 +24956,559 @@ export function handleBatchResponse(
 
 
 
+// ═════════════════════════════════════════════════════════════
+// 新增武将：田畴（善刀）/ 高览（峻攻·等力）/ 崔琰（雅俊·尊嫡）/ 张翼（执义）
+// ═════════════════════════════════════════════════════════════
+
+/** 统一返回值：NEW_SKILL_UNHANDLED 表示该技能不属于本组处理范围 */
+const NEW_SKILL_UNHANDLED = Symbol('new-skill-unhandled')
+type NewSkillResult = { error: string } | void | typeof NEW_SKILL_UNHANDLED
+
+/** 本批次新增的主动技能（由 handleUseSkillImpl 转发） */
+const NEW_ACTIVE_SKILLS = new Set(['tianchou_shandao', 'gaolan_jungong', 'cuiyan_zundi'])
+
+/** 本批次新增技能在响应阶段用到的 skillId */
+const NEW_RESPONSE_SKILLS = new Set([
+    'tianchou_shandao',
+    'gaolan_jungong', 'gaolan_jungong_discard', 'gaolan_jungong_target', 'gaolan_dengli',
+    'cuiyan_yajun', 'cuiyan_yajun_target', 'cuiyan_yajun_place',
+    'cuiyan_zundi_move', 'cuiyan_zundi_move_src', 'cuiyan_zundi_move_dst',
+    'zhangyi_yiyi', 'zhangyi_yiyi_target',
+])
+
+export function isNewActiveSkill(skillId: string): boolean {
+    return NEW_ACTIVE_SKILLS.has(skillId)
+}
+
+/** 取一名角色区域里价值最低的一张牌（手牌优先，其次装备区，最后判定区） */
+function takeLowestValueCardOf(state: GameState, general: GeneralInstance): Card | undefined {
+    const handPick = lowValueCard(general)
+    if (handPick) {
+        const detached = detachCardFromHandOrEquip(state, general, handPick.id)
+        return 'error' in detached ? undefined : detached
+    }
+    for (const slot of Object.values(EquipSlot)) {
+        const eq = general.equip[slot]
+        if (!eq) continue
+        const detached = detachCardFromHandOrEquip(state, general, eq.id)
+        return 'error' in detached ? undefined : detached
+    }
+    if (general.judgeZone.length > 0) return general.judgeZone.shift()
+    return undefined
+}
+
+/** 峻攻：支付代价后选择【杀】的目标 */
+function pushJungongTarget(state: GameState, general: GeneralInstance): void {
+    const selfIdx = indexOfGeneral(state, general)
+    const candidates = state.generals
+        .map((g, i) => ({ g, i }))
+        .filter(({ g, i }) => g.alive && i !== selfIdx)
+        .map(({ i }) => i)
+    if (candidates.length === 0) {
+        addLog(state, `【${getGeneralName(general)}】【峻攻】没有可以指定为目标的角色`)
+        return
+    }
+    state.pendingResponseQueue.unshift({
+        type: ResponseType.SKILL_CHOOSE_TARGET,
+        targetGeneralIndex: selfIdx,
+        context: {
+            skillId: 'gaolan_jungong_target',
+            skillName: '峻攻',
+            description: '选择视为使用【杀】的目标（无距离与次数限制）',
+            candidateIndices: candidates,
+        },
+    })
+}
+
+/** 新增武将的主动技能 */
+export function handleNewActiveSkill(
+    state: GameState,
+    general: GeneralInstance,
+    data: C2S_UseSkill,
+): NewSkillResult {
+    const name = getGeneralName(general)
+    const targets = (data.targetIndices ?? []).map(i => state.generals[i]).filter(g => g?.alive)
+    switch (data.skillId) {
+        // ── 善刀（田畴）：各取一张牌置顶，视为对这些角色使用【五谷丰登】，
+        //    再视为对其余存活角色（不含自己）使用【万箭齐发】
+        case 'tianchou_shandao': {
+            if (!hasSkill(general, 'tianchou_shandao')) return { error: '你没有此技能' }
+            if (general.shandaoUsedPhase) return { error: '本阶段已发动过【善刀】' }
+            const picks: GeneralInstance[] = []
+            for (const idx of [...new Set(data.targetIndices ?? [])]) {
+                const g = state.generals[idx]
+                if (!g?.alive || picks.includes(g)) continue
+                if (!hasCardInArea(g)) continue
+                picks.push(g)
+            }
+            if (picks.length === 0) return { error: '请选择至少一名有牌的角色' }
+            general.shandaoUsedPhase = true
+            general.skillsUsedThisTurn.push('tianchou_shandao')
+            const selfIdx = indexOfGeneral(state, general)
+
+            // ① 各取一张牌置于牌堆顶（后取的压在上面）
+            const stolen: Card[] = []
+            for (const g of picks) {
+                const taken = takeLowestValueCardOf(state, g)
+                if (taken) stolen.push(taken)
+            }
+            for (const c of stolen) state.deck.unshift(c)
+            addLog(state, `【${name}】发动【善刀】，将${picks.map(g => `【${getGeneralName(g)}】`).join('')}的各一张牌（${stolen.map(c => cardFullName(c)).join('、') || '无'}）置于牌堆顶`)
+
+            // ② 视为对这些角色使用【五谷丰登】
+            const harvestCards = drawCards(state, picks.length)
+            state.harvestPool = harvestCards
+            const harvestTargets = picks.filter(g => g.alive && !isZhichiImmune(state, g))
+            addLog(state, `【${name}】【善刀】视为对${harvestTargets.map(g => `【${getGeneralName(g)}】`).join('') || '（无）'}使用【五谷丰登】，翻出${harvestCards.map(c => cardFullName(c)).join('、')}`)
+
+            // ③ 视为对除这些角色外的其他角色使用【万箭齐发】（恒不含田畴自己）
+            const virtualArrows: Card = {
+                id: `virtual_shandao_arrows_${state.turnSerial ?? 0}_${state.log.length}`,
+                suit: CardSuit.HEART, value: 1,
+                category: CardCategory.TRICK, name: TrickCardName.ARROWS, virtual: true,
+            }
+            const arrowsTargets = state.generals.filter(g => {
+                if (!g.alive || g === general || picks.includes(g)) return false
+                if (g.equip.armor?.name === EquipmentCardName.VINE) {
+                    addLog(state, `【${getGeneralName(g)}】的【藤甲】使【万箭齐发】无效`)
+                    return false
+                }
+                if (isZhichiImmune(state, g)) {
+                    addLog(state, `【${getGeneralName(g)}】的【智迟】使【万箭齐发】对其无效`)
+                    return false
+                }
+                return true
+            })
+            addLog(state, `【${name}】【善刀】视为对${arrowsTargets.map(g => `【${getGeneralName(g)}】`).join('') || '（无）'}使用一张【万箭齐发】`)
+            // unshift 反向入队：先压万箭、再压五谷，保证五谷先结算
+            for (let i = arrowsTargets.length - 1; i >= 0; i--) {
+                const tIdx = indexOfGeneral(state, arrowsTargets[i])
+                triggerJianjiang(state, arrowsTargets[i], general)
+                state.pendingResponseQueue.unshift({
+                    type: ResponseType.AOE_DODGE,
+                    targetGeneralIndex: tIdx,
+                    context: {
+                        sourceGeneralIndex: selfIdx,
+                        sourceCardId: virtualArrows.id,
+                        needsNegate: true,
+                        trickCardName: TrickCardName.ARROWS,
+                        trickTargetName: getGeneralName(arrowsTargets[i]),
+                    },
+                })
+            }
+            for (let i = harvestTargets.length - 1; i >= 0; i--) {
+                state.pendingResponseQueue.unshift({
+                    type: ResponseType.HARVEST_PICK,
+                    targetGeneralIndex: indexOfGeneral(state, harvestTargets[i]),
+                    context: {
+                        sourceGeneralIndex: selfIdx,
+                        needsNegate: true,
+                        trickCardName: TrickCardName.HARVEST,
+                        trickTargetName: getGeneralName(harvestTargets[i]),
+                    },
+                })
+            }
+            return
+        }
+        // ── 峻攻（高览）：弃置 X 张牌或失去 X 点体力，视为使用一张无距离次数限制的【杀】
+        case 'gaolan_jungong': {
+            if (!hasSkill(general, 'gaolan_jungong')) return { error: '你没有此技能' }
+            if (general.jungongDisabledTurn !== undefined
+                && general.jungongDisabledTurn === (state.turnSerial ?? 0)) {
+                return { error: '【峻攻】本回合已失效' }
+            }
+            const x = (general.jungongCount ?? 0) + 1
+            const ownCards = general.hand.length + Object.values(general.equip).filter(Boolean).length
+            const canDiscard = ownCards >= x
+            const canLoseHp = general.hp > x
+            if (!canDiscard && !canLoseHp) {
+                return { error: `【峻攻】需要弃置${x}张牌或失去${x}点体力，你无法支付` }
+            }
+            const options = [
+                ...(canDiscard ? [{ action: 'discard', label: `弃置${x}张牌` }] : []),
+                ...(canLoseHp ? [{ action: 'loseHp', label: `失去${x}点体力` }] : []),
+            ]
+            state.pendingResponseQueue.unshift({
+                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                targetGeneralIndex: indexOfGeneral(state, general),
+                context: {
+                    skillId: 'gaolan_jungong',
+                    skillName: '峻攻',
+                    description: `支付代价：弃置${x}张牌或失去${x}点体力，视为使用一张无距离次数限制的【杀】`,
+                    options,
+                    jungongCost: x,
+                },
+            })
+            return
+        }
+        // ── 尊嫡（崔琰）：弃一张手牌并选择一名角色，判定黑其摸三张 / 红其可移动场上一张牌
+        case 'cuiyan_zundi': {
+            if (!hasSkill(general, 'cuiyan_zundi')) return { error: '你没有此技能' }
+            if (general.zundiUsedPhase) return { error: '本阶段已发动过【尊嫡】' }
+            if (general.hand.length === 0) return { error: '需要弃置一张手牌' }
+            const target = targets[0] ?? general
+            const costId = (data.cardIds ?? []).find(id => general.hand.some(c => c.id === id))
+                ?? lowValueCard(general)?.id
+            if (!costId) return { error: '需要弃置一张手牌' }
+            const removed = removeCardFromHandOrEquip(state, general, costId)
+            if ('error' in removed) return removed
+            general.zundiUsedPhase = true
+            general.skillsUsedThisTurn.push('cuiyan_zundi')
+            addLog(state, `【${name}】发动【尊嫡】，弃置${cardFullName(removed)}并选择【${getGeneralName(target)}】`)
+            performSkillJudge(state, general, 'zundi', '尊嫡', {
+                zundiTargetIndex: indexOfGeneral(state, target),
+            })
+            return
+        }
+        default:
+            return NEW_SKILL_UNHANDLED
+    }
+}
+
+/** 新增武将的技能响应（确认 / 选目标 / 选牌） */
+export function handleNewSkillResponse(
+    state: GameState,
+    general: GeneralInstance,
+    pending: PendingResponse,
+    data: C2S_Respond,
+): NewSkillResult {
+    const ctx = pending.context as any
+    const skillId = ctx?.skillId as string | undefined
+    if (!skillId) return NEW_SKILL_UNHANDLED
+    const action = (data as any).action as string | undefined
+    const ids = [...new Set(((data as any).cardIds as string[] | undefined)
+        ?? ((data as any).cardId ? [(data as any).cardId as string] : []))]
+    const singleIdx = (data as any).targetIndex as number | undefined
+    const name = getGeneralName(general)
+    const selfIdx = indexOfGeneral(state, general)
+
+    // 雅俊②拼点：发起者只能选本回合获得的牌（引擎侧兜底校验，避免误选其他手牌）
+    if (pending.type === ResponseType.SKILL_PICK_CARD && ctx.mode === 'pindian'
+        && state.pindian?.skillId === 'cuiyan_yajun' && state.pindian.stage === 'initiator'
+        && ids.length > 0) {
+        const gained = new Set((state.pindian.extra?.yajunGainedIds as string[] | undefined) ?? [])
+        if (!gained.has(ids[0])) return { error: '【雅俊】须选择一张本回合获得的牌' }
+    }
+
+    if (!NEW_RESPONSE_SKILLS.has(skillId)) return NEW_SKILL_UNHANDLED
+
+    if (pending.type === ResponseType.SKILL_ACTIVATE_CONFIRM) {
+        // ── 等力（高览）：体力值相等，摸一张牌
+        if (skillId === 'gaolan_dengli') {
+            state.pendingResponseQueue.shift()
+            if (action !== 'confirm') return
+            const dlDrawn = drawForGeneral(state, general, 1)
+            general.hand.push(...dlDrawn)
+            addLog(state, `【${name}】发动【等力】，摸${dlDrawn.length}张牌`)
+            return
+        }
+        // ── 峻攻（高览）：选择支付方式
+        if (skillId === 'gaolan_jungong') {
+            state.pendingResponseQueue.shift()
+            const cost = (ctx.jungongCost as number) ?? 1
+            if (action === 'loseHp') {
+                loseHp(state, general, cost)
+                addLog(state, `【${name}】【峻攻】失去${cost}点体力（${general.hp}/${general.maxHp}）`)
+                if (general.alive) pushJungongTarget(state, general)
+                return
+            }
+            if (action === 'discard') {
+                if (general.hand.length === 0 && !Object.values(general.equip).some(Boolean)) {
+                    addLog(state, `【${name}】【峻攻】没有可弃置的牌`)
+                    return
+                }
+                const pool = [
+                    ...general.hand.map(c => c.id),
+                    ...Object.values(general.equip).filter((c): c is Card => !!c).map(c => c.id),
+                ]
+                askPickCard(state, general, 'gaolan_jungong_discard', '峻攻',
+                    `弃置${cost}张牌`, {
+                    count: cost, mode: 'discard', candidateCardIds: pool,
+                    extra: { jungongCost: cost },
+                })
+                return
+            }
+            return
+        }
+        // ── 雅俊②（崔琰）：出牌阶段开始时，用本回合获得的牌拼点
+        if (skillId === 'cuiyan_yajun') {
+            state.pendingResponseQueue.shift()
+            if (action !== 'confirm') return
+            const gained = new Set(general.gainedCardIdsThisTurn ?? [])
+            if (!general.hand.some(c => gained.has(c.id))) {
+                addLog(state, `【${name}】【雅俊】没有本回合获得的牌，无法拼点`)
+                return
+            }
+            const candidates = state.generals
+                .map((g, i) => ({ g, i }))
+                .filter(({ g, i }) => g.alive && i !== selfIdx && g.hand.length > 0)
+                .map(({ i }) => i)
+            if (candidates.length === 0) {
+                addLog(state, `【${name}】【雅俊】没有可以拼点的其他角色`)
+                return
+            }
+            askChooseTarget(state, general, 'cuiyan_yajun_target', '雅俊',
+                '选择一名其他角色拼点（你使用一张本回合获得的牌）', candidates)
+            return
+        }
+        // ── 雅俊②：拼点赢后把其中一张拼点牌置于牌堆顶
+        if (skillId === 'cuiyan_yajun_place') {
+            state.pendingResponseQueue.shift()
+            if (!action || !action.startsWith('place:')) {
+                addLog(state, `【${name}】【雅俊】不将拼点牌置于牌堆顶`)
+                return
+            }
+            const placeId = action.slice(6)
+            const placeIdx = state.discard.findIndex(c => c.id === placeId)
+            if (placeIdx < 0) return
+            const placeCard = state.discard.splice(placeIdx, 1)[0]
+            state.deck.unshift(placeCard)
+            addLog(state, `【${name}】【雅俊】将${cardFullName(placeCard)}置于牌堆顶`)
+            return
+        }
+        // ── 尊嫡（崔琰）：判定红色后，目标可以移动场上的一张牌
+        if (skillId === 'cuiyan_zundi_move') {
+            state.pendingResponseQueue.shift()
+            if (action !== 'confirm') {
+                addLog(state, `【${name}】【尊嫡】放弃移动场上的牌`)
+                return
+            }
+            const sources = state.generals
+                .map((g, i) => ({ g, i }))
+                .filter(({ g }) => g.alive && Object.values(g.equip).some(Boolean))
+                .map(({ i }) => i)
+            if (sources.length === 0) {
+                addLog(state, `【${name}】【尊嫡】场上没有可移动的装备牌`)
+                return
+            }
+            askChooseTarget(state, general, 'cuiyan_zundi_move_src', '尊嫡',
+                '选择要移动谁的装备牌', sources)
+            return
+        }
+        // ── 执义（张翼）：选择视为使用一张基本牌，或摸一张牌
+        if (skillId === 'zhangyi_yiyi') {
+            state.pendingResponseQueue.shift()
+            const yiyiAction = action && action.startsWith('use:') ? action : 'draw'
+            if (!yiyiAction.startsWith('use:')) {
+                const yiyiDrawn = drawForGeneral(state, general, 1)
+                general.hand.push(...yiyiDrawn)
+                addLog(state, `【${name}】【执义】选择摸一张牌`)
+                if (ctx.endPhaseSkill) advanceTurnGuarded(state)
+                return
+            }
+            const yiyiName = yiyiAction.slice(4)
+            if (yiyiName === BasicCardName.PEACH) {
+                if (general.hp < general.maxHp) recoverHp(state, general, 1)
+                markBasicUsed(general, BasicCardName.PEACH)
+                addLog(state, `【${name}】【执义】视为使用【桃】，体力 ${general.hp}/${general.maxHp}`)
+                if (ctx.endPhaseSkill) advanceTurnGuarded(state)
+                return
+            }
+            if (yiyiName === BasicCardName.WINE) {
+                general.wineDrunk = true
+                markBasicUsed(general, BasicCardName.WINE)
+                addLog(state, `【${name}】【执义】视为使用【酒】，本回合下一张【杀】伤害+1`)
+                if (ctx.endPhaseSkill) advanceTurnGuarded(state)
+                return
+            }
+            if (yiyiName !== BasicCardName.ATTACK && yiyiName !== BasicCardName.FIRE_SLASH
+                && yiyiName !== BasicCardName.THUNDER_SLASH) {
+                addLog(state, `【${name}】【执义】无法视为使用该基本牌，改为摸一张牌`)
+                const fallback = drawForGeneral(state, general, 1)
+                general.hand.push(...fallback)
+                if (ctx.endPhaseSkill) advanceTurnGuarded(state)
+                return
+            }
+            const slashCandidates = state.generals
+                .map((g, i) => ({ g, i }))
+                .filter(({ g, i }) => g.alive && i !== selfIdx
+                    && getAttackRange(general, g, state.generals).inRange)
+                .map(({ i }) => i)
+            if (slashCandidates.length === 0) {
+                addLog(state, `【${name}】【执义】攻击范围内没有合法目标，改为摸一张牌`)
+                const fallback = drawForGeneral(state, general, 1)
+                general.hand.push(...fallback)
+                if (ctx.endPhaseSkill) advanceTurnGuarded(state)
+                return
+            }
+            state.pendingResponseQueue.unshift({
+                type: ResponseType.SKILL_CHOOSE_TARGET,
+                targetGeneralIndex: selfIdx,
+                context: {
+                    skillId: 'zhangyi_yiyi_target',
+                    skillName: '执义',
+                    description: `视为使用【${cardDisplayName({ name: yiyiName } as any)}】，选择目标`,
+                    candidateIndices: slashCandidates,
+                    yiyiCardName: yiyiName,
+                    endPhaseSkill: ctx.endPhaseSkill,
+                },
+            })
+            return
+        }
+        return NEW_SKILL_UNHANDLED
+    }
+
+    if (pending.type === ResponseType.SKILL_CHOOSE_TARGET) {
+        // ── 峻攻：选好目标后视为使用【杀】
+        if (skillId === 'gaolan_jungong_target') {
+            state.pendingResponseQueue.shift()
+            const jgTargetIdx = singleIdx
+            if (jgTargetIdx === undefined || !state.generals[jgTargetIdx]?.alive) {
+                addLog(state, `【${name}】【峻攻】放弃了目标，视为使用的【杀】未生效`)
+                return
+            }
+            let createdId: string | undefined
+            const jgResult = useVirtualSlash(state, general, jgTargetIdx, {
+                noRange: true, noLimit: true, label: '（峻攻）',
+                onCreated: (vc) => { createdId = vc.id },
+            })
+            if (jgResult && 'error' in jgResult) {
+                addLog(state, `【${name}】【峻攻】${jgResult.error}`)
+                return
+            }
+            if (createdId) {
+                general.jungongSlashId = createdId
+                general.jungongCount = (general.jungongCount ?? 0) + 1
+                addLog(state, `【${name}】【峻攻】本阶段已发动${general.jungongCount}次`)
+            }
+            return
+        }
+        // ── 雅俊②：选定拼点角色后，让发起者选一张本回合获得的牌
+        if (skillId === 'cuiyan_yajun_target') {
+            state.pendingResponseQueue.shift()
+            const opponents = (ctx.candidateIndices as number[]) ?? []
+            const pickIdx = singleIdx !== undefined && opponents.includes(singleIdx)
+                ? singleIdx : opponents.find(i => state.generals[i]?.alive)
+            const opponent = pickIdx === undefined ? undefined : state.generals[pickIdx]
+            if (!opponent?.alive || opponent.hand.length === 0) {
+                addLog(state, `【${name}】【雅俊】没有可以拼点的角色`)
+                return
+            }
+            const gainedIds = (general.gainedCardIdsThisTurn ?? [])
+                .filter(id => general.hand.some(c => c.id === id))
+            if (gainedIds.length === 0) {
+                addLog(state, `【${name}】【雅俊】本回合获得的牌已不在手中，无法拼点`)
+                return
+            }
+            state.pindian = {
+                initiatorIndex: selfIdx,
+                opponentIndex: pickIdx!,
+                skillId: 'cuiyan_yajun',
+                skillName: '雅俊',
+                stage: 'initiator',
+                extra: { yajunGainedIds: gainedIds },
+            }
+            askPickCard(state, general, 'pindian', '雅俊',
+                `与【${getGeneralName(opponent)}】拼点：选择一张本回合获得的牌`,
+                { count: 1, mode: 'pindian', candidateCardIds: gainedIds, extra: { pindianStage: 'initiator' } })
+            return
+        }
+        // ── 尊嫡：移动装备的第一步（选来源）
+        if (skillId === 'cuiyan_zundi_move_src') {
+            const candidates = (ctx.candidateIndices as number[]) ?? []
+            const srcIdx = singleIdx !== undefined && candidates.includes(singleIdx)
+                ? singleIdx : candidates[0]
+            const src = srcIdx === undefined ? undefined : state.generals[srcIdx]
+            if (!src?.alive || !Object.values(src.equip).some(Boolean)) {
+                state.pendingResponseQueue.shift()
+                addLog(state, `【${name}】【尊嫡】没有可移动的装备牌`)
+                return
+            }
+            state.pendingResponseQueue.shift()
+            const dest = state.generals
+                .map((g, i) => ({ g, i }))
+                .filter(({ g, i }) => g.alive && i !== srcIdx)
+                .map(({ i }) => i)
+            if (dest.length === 0) {
+                addLog(state, `【${name}】【尊嫡】没有可以接受装备牌的角色`)
+                return
+            }
+            state.pendingResponseQueue.unshift({
+                type: ResponseType.SKILL_CHOOSE_TARGET,
+                targetGeneralIndex: selfIdx,
+                context: {
+                    skillId: 'cuiyan_zundi_move_dst',
+                    skillName: '尊嫡',
+                    description: `选择【${getGeneralName(src)}】装备牌的获得者`,
+                    candidateIndices: dest,
+                    zundiMoveSource: srcIdx,
+                },
+            })
+            return
+        }
+        // ── 尊嫡：移动装备的第二步（选获得者）
+        if (skillId === 'cuiyan_zundi_move_dst') {
+            const candidates = (ctx.candidateIndices as number[]) ?? []
+            const destIdx = singleIdx !== undefined && candidates.includes(singleIdx)
+                ? singleIdx : candidates[0]
+            const srcIdx = ctx.zundiMoveSource as number | undefined
+            const src = srcIdx === undefined ? undefined : state.generals[srcIdx]
+            const dest = destIdx === undefined ? undefined : state.generals[destIdx]
+            state.pendingResponseQueue.shift()
+            if (!src?.alive || !dest?.alive) return
+            const slot = Object.values(EquipSlot).find(s => src.equip[s])
+            if (!slot) return
+            const eqCard = clearEquipSlot(state, src, slot)
+            if (!eqCard) return
+            const oldEq = dest.equip[slot]
+            if (oldEq) pushReplacedEquip(state, oldEq)
+            dest.equip[slot] = eqCard
+            addLog(state, `【${name}】【尊嫡】将【${getGeneralName(src)}】的${cardFullName(eqCard)}移动到【${getGeneralName(dest)}】的装备区`)
+            return
+        }
+        // ── 执义：视为使用【杀】选择目标
+        if (skillId === 'zhangyi_yiyi_target') {
+            const candidates = (ctx.candidateIndices as number[]) ?? []
+            const targetIdx = singleIdx !== undefined && candidates.includes(singleIdx)
+                ? singleIdx : candidates[0]
+            state.pendingResponseQueue.shift()
+            if (targetIdx === undefined || !state.generals[targetIdx]?.alive) {
+                addLog(state, `【${name}】【执义】没有合法目标，改为摸一张牌`)
+                const fallback = drawForGeneral(state, general, 1)
+                general.hand.push(...fallback)
+                if (ctx.endPhaseSkill) advanceTurnGuarded(state)
+                return
+            }
+            const yiyiName = ctx.yiyiCardName as string
+            const nature = yiyiName === BasicCardName.FIRE_SLASH ? 'fire'
+                : yiyiName === BasicCardName.THUNDER_SLASH ? 'thunder' : 'normal'
+            const yiyiResult = useVirtualSlash(state, general, targetIdx, { label: '（执义）', nature })
+            if (yiyiResult && 'error' in yiyiResult) {
+                addLog(state, `【${name}】【执义】视为使用的【杀】未能生效（${yiyiResult.error}）`)
+            }
+            if (ctx.endPhaseSkill) advanceTurnGuarded(state)
+            return
+        }
+        return NEW_SKILL_UNHANDLED
+    }
+
+    if (pending.type === ResponseType.SKILL_PICK_CARD) {
+        // ── 峻攻：弃置 X 张牌后继续选【杀】目标
+        if (skillId === 'gaolan_jungong_discard') {
+            state.pendingResponseQueue.shift()
+            const cost = (ctx.jungongCost as number) ?? 1
+            if (action === 'decline') {
+                addLog(state, `【${name}】【峻攻】放弃支付，技能未发动`)
+                return
+            }
+            let paid = 0
+            for (const id of ids) {
+                if (paid >= cost) break
+                const removed = removeCardFromHandOrEquip(state, general, id)
+                if ('error' in removed) continue
+                paid++
+            }
+            if (paid < cost) {
+                addLog(state, `【${name}】【峻攻】只支付了${paid}/${cost}张牌，改为失去体力`)
+                loseHp(state, general, cost - paid)
+            } else {
+                addLog(state, `【${name}】【峻攻】弃置${paid}张牌作为代价`)
+            }
+            if (general.alive) pushJungongTarget(state, general)
+            return
+        }
+        return NEW_SKILL_UNHANDLED
+    }
+
+    return NEW_SKILL_UNHANDLED
+}

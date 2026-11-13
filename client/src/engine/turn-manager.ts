@@ -12,6 +12,7 @@ import {
     ResponseType,
     CardCategory,
     EquipSlot,
+    BasicCardName,
 } from 'sgs3v3-shared'
 import { drawCards, ensureDeck } from './deck'
 import { addLog, getActiveGeneral, getHandLimit, getAttackRange, resetActedFlags, maybeChunlaoPickup, isSlashLikeCard } from './game-state'
@@ -1142,6 +1143,10 @@ function drawForTurn(state: GameState, general: GeneralInstance, count: number):
         && (general.zhanshenEffects ?? []).includes(1)) {
         count += 1
     }
+    // 雅俊①（崔琰）：摸牌阶段多摸一张牌
+    if (hasSkillById(general, 'cuiyan_yajun')) {
+        count += 1
+    }
     if (!hasSkillById(general, 'xuyou_cunmu') || state.deck.length === 0) {
         return drawCards(state, count)
     }
@@ -1357,6 +1362,10 @@ export function finishJudgePhaseAndContinue(
 
             const drawn = drawForTurn(state, general, drawCount)
             general.hand.push(...drawn)
+            // 雅俊②（崔琰）：出牌阶段开始时只能用“本回合获得的牌”拼点，摸牌阶段到手的牌当场记下
+            general.gainedCardIdsThisTurn = [
+                ...(general.gainedCardIdsThisTurn ?? []), ...drawn.map(c => c.id),
+            ]
             addLog(state, `【${name}】摸了 ${drawn.length} 张牌${drawCount > 2 ? '（英姿+1）' : ''}`)
             maybeHongyuan(state, general, drawn.length)
         }
@@ -1425,6 +1434,10 @@ export function finishDrawPhaseAfterXunxun(
     const drawCount = hasYingziSkill(general) ? 3 : 2
     const drawn = drawForTurn(state, general, drawCount)
     general.hand.push(...drawn)
+    // 雅俊②（崔琰）：同上，摸牌阶段到手的牌当场记为“本回合获得的牌”
+    general.gainedCardIdsThisTurn = [
+        ...(general.gainedCardIdsThisTurn ?? []), ...drawn.map(c => c.id),
+    ]
     addLog(state, `【${getGeneralName(general)}】摸了 ${drawn.length} 张牌`)
     if (!skipAction) {
         beginActionPhase(state, general)
@@ -1573,6 +1586,33 @@ export function beginActionPhase(state: GameState, general: GeneralInstance): vo
     general.paiyiLimitPhase = 1
     general.danshouItems = []
     general.qiangshiCategory = undefined
+
+    // 新增武将（田畴 / 高览 / 崔琰）：出牌阶段级状态重置
+    general.shandaoUsedPhase = false
+    general.zundiUsedPhase = false
+    general.cuiyanYajunUsedPhase = false
+    // 峻攻：X 按“本阶段此前发动次数 +1”计算，阶段切换时清零
+    general.jungongCount = 0
+
+    // 雅俊②（崔琰）：出牌阶段开始时，可用一张本回合获得的牌与一名其他角色拼点
+    if (hasSkillById(general, 'cuiyan_yajun') && !general.cuiyanYajunUsedPhase) {
+        const yajunGained = new Set(general.gainedCardIdsThisTurn ?? [])
+        const hasGainedCard = general.hand.some(c => yajunGained.has(c.id))
+        const hasOpponent = state.generals.some(g => g.alive && g !== general && g.hand.length > 0)
+        if (hasGainedCard && hasOpponent) {
+            general.cuiyanYajunUsedPhase = true
+            state.pendingResponseQueue.push({
+                type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+                targetGeneralIndex: state.generals.indexOf(general),
+                context: {
+                    skillId: 'cuiyan_yajun',
+                    skillName: '雅俊',
+                    description: '用一张本回合获得的牌与一名其他角色拼点：赢则可将一张拼点牌置于牌堆顶；没赢则本回合手牌上限-1',
+                },
+            })
+            addLog(state, `【${getGeneralName(general)}】可发动【雅俊】拼点`)
+        }
+    }
 
     // 强识（界张松）：出牌阶段开始时，观看一名其他角色的手牌并展示其中一张
     if (hasSkillById(general, 'zhangsong_qiangshi')
@@ -2739,6 +2779,44 @@ function runEndPhaseSkills(state: GameState, general: GeneralInstance): void {
 
     // 辟田（郑浑）：结束阶段摸至手牌上限（至多五张），然后失去因此获得的上限加值
     triggerPitian(state, general)
+
+    // 执义（张翼）：一名角色的结束阶段，若张翼本回合使用或打出过基本牌，选择一项
+    for (const zy of state.generals) {
+        if (!zy.alive || !hasSkillById(zy, 'zhangyi_yiyi')) continue
+        if (state.turnSerial !== undefined && zy.yiyiTurn === state.turnSerial) continue
+        const zyUsed = zy.basicUsedThisTurn ?? []
+        if (zyUsed.length === 0) continue
+        zy.yiyiTurn = state.turnSerial
+        const zyOptions: { action: string; label: string }[] = []
+        for (const usedName of zyUsed) {
+            // 【闪】不能主动使用，不作为“视为使用”的选项
+            if (usedName === BasicCardName.DODGE) continue
+            if (usedName === BasicCardName.PEACH && zy.hp >= zy.maxHp) continue
+            const isSlashName = usedName === BasicCardName.ATTACK
+                || usedName === BasicCardName.FIRE_SLASH || usedName === BasicCardName.THUNDER_SLASH
+            if (isSlashName && !state.generals.some(g => g.alive && g !== zy
+                && getAttackRange(zy, g, state.generals).inRange)) continue
+            zyOptions.push({
+                action: `use:${usedName}`,
+                label: `视为使用${usedName === BasicCardName.PEACH ? '【桃】'
+                    : usedName === BasicCardName.WINE ? '【酒】'
+                        : `【${cardDisplayName({ name: usedName } as any)}】`}`,
+            })
+        }
+        zyOptions.push({ action: 'draw', label: '摸一张牌' })
+        state.pendingResponseQueue.push({
+            type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+            targetGeneralIndex: state.generals.indexOf(zy),
+            context: {
+                skillId: 'zhangyi_yiyi',
+                skillName: '执义',
+                description: `本回合使用或打出过基本牌（${zyUsed.map(n => cardDisplayName({ name: n } as any)).join('、')}），选择一项`,
+                options: zyOptions,
+                endPhaseSkill: true,
+            },
+        })
+        addLog(state, `【${getGeneralName(zy)}】可发动【执义】`)
+    }
 
     // 生息（蒋琬-竞）：一名角色回合结束时，若其已受伤，可弃置其X张牌，然后其回复1点体力
     for (const jw of state.generals) {

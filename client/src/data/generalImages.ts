@@ -16,6 +16,8 @@ export const GENERAL_IMAGE: Record<string, string> = {
     wenpin: '/generals/wenpin.webp',
     wenpin_jing: '/generals/wenpin.webp',
     wenyang: '/generals/wenyang.webp',
+    gaolan: '/generals/gaolan.webp',
+    cuiyan: '/generals/cuiyan.webp',
     lidian_jie: '/generals/lidian.webp',
     simayi_jing: '/generals/simayi_jing.webp',
     xuchu_jie: '/generals/xuchu_jie.webp',
@@ -98,6 +100,7 @@ export const GENERAL_IMAGE: Record<string, string> = {
     qinmi: '/generals/qinmi.webp',
     lifeng: '/generals/lifeng.webp',
     qiaozhou: '/generals/qiaozhou.webp',
+    zhangyi: '/generals/zhangyi.webp',
     // 吴
     sunquan: '/generals/sunquan.webp',
     sunquan_jie: '/generals/sunquan_jie.webp',
@@ -201,6 +204,7 @@ export const GENERAL_IMAGE: Record<string, string> = {
     liuxie: '/generals/liuxie.webp',
     liuyan: '/generals/liuyan.webp',
     lvbu_jie: '/generals/lvbu_jie.webp',
+    tianchou: '/generals/tianchou.webp',
     // 洛书版新增
     zhangmancheng: '/generals/zhangmancheng.webp',
     caomao: '/generals/caomao.webp',

@@ -373,6 +373,18 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
             id: 'wenyang_zhuifeng', name: '椎锋',
             desc: '限两次：失去1点体力，视为使用一张【决斗】（选1名其他角色）；若因此受到伤害，防止此伤害且本阶段此技能失效',
         }],
+        tianchou: [{
+            id: 'tianchou_shandao', name: '善刀',
+            desc: '限一次：选择任意名有牌的角色（可多选），各取一张牌置于牌堆顶，视为对这些角色使用【五谷丰登】，再视为对其余角色使用【万箭齐发】',
+        }],
+        gaolan: [{
+            id: 'gaolan_jungong', name: '峻攻',
+            desc: '出牌阶段：弃 X 张牌或失去 X 点体力（X 为本阶段已发动次数+1），视为使用无距离次数限制的【杀】；此【杀】造成伤害后本回合失效',
+        }],
+        cuiyan: [{
+            id: 'cuiyan_zundi', name: '尊嫡',
+            desc: '限一次：弃一张手牌并选择一名角色（不选则为自己），判定黑其摸三张牌、红其可移动场上的一张牌',
+        }],
     }
     return map[generalId] ?? []
 }
@@ -2560,6 +2572,12 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                         ? '（选1张手牌或装备牌弃置）'
                                     : activeSkillId === 'chengong_mingce'
                                         ? '（选1张装备牌/杀 → 选受牌者 → 可选1名其攻击范围内的杀目标，按此顺序点选，共2个目标）'
+                                        : activeSkillId === 'tianchou_shandao'
+                                            ? '（点选任意名有牌的角色，可多选；确认后各取一张牌置顶）'
+                                        : activeSkillId === 'gaolan_jungong'
+                                            ? '（确认后选择弃牌或失去体力，并选【杀】的目标）'
+                                        : activeSkillId === 'cuiyan_zundi'
+                                            ? '（选1张手牌 → 可选1名角色，不选则为自己）'
                                         : ''
                                 return (
                                     <>

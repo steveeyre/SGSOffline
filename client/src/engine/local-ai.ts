@@ -832,6 +832,18 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 payload.action = 'confirm'
                 break
             }
+            // 新增武将：等力（体力相等摸一张）/ 尊嫡的移动装备，都是纯收益
+            if (skillId === 'gaolan_dengli' || skillId === 'cuiyan_zundi_move') {
+                payload.action = 'confirm'
+                break
+            }
+            // 雅俊②（崔琰）：有本回合获得的牌、且手牌不至于打空时拼点
+            if (skillId === 'cuiyan_yajun') {
+                const yjGained = new Set(self?.gainedCardIdsThisTurn ?? [])
+                const yjHasCard = (self?.hand ?? []).some(c => yjGained.has(c.id))
+                if (yjHasCard && (self?.hand.length ?? 0) >= 2) payload.action = 'confirm'
+                break
+            }
             // 利驭（界吕布）：目标有非装备牌时拿牌不触发决斗；只有装备牌时不值得冒险
             if (skillId === 'lvbu_jie_liyu') {
                 const liyuVictim = state.generals[(ctx.liyuTargetIndex as number) ?? -1]
@@ -2250,6 +2262,16 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                 else payload.action = 'decline'
                 break
             }
+            if (skillId === 'cuiyan_zundi_move_dst') {
+                // 尊嫡：移动来的装备留在自己装备区（自己可能在候选里，否则给最近的队友）
+                const dest = candidates
+                    .map((i) => ({ i, g: state.generals[i] }))
+                    .filter(({ g }) => g?.alive && !isEnemy(state, g, playerId))
+                    .sort((a, b) => Number(b.i === targetIndex) - Number(a.i === targetIndex))[0]
+                if (dest) payload.targetIndex = dest.i
+                else payload.action = 'decline'
+                break
+            }
             const enemies = candidates.filter((idx) => isEnemy(state, state.generals[idx], playerId))
             const pick = (enemies.length > 0 ? enemies : candidates)[0]
             if (pick !== undefined) payload.targetIndex = pick
@@ -2312,6 +2334,24 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                     (b.value * 6 - keepValue(b) * 0.8) - (a.value * 6 - keepValue(a) * 0.8))[0]
                 if (pindianBest) payload.cardIds = [pindianBest.id]
                 else payload.action = 'decline'
+                break
+            }
+            // 雅俊②（崔琰）：本回合获得的牌里挑点数最大的一张拼点
+            if (ctx.mode === 'pindian' && state.pindian?.skillId === 'cuiyan_yajun') {
+                const yjPick = [...pool].sort((a, b) =>
+                    (b.value * 6 - keepValue(b) * 0.8) - (a.value * 6 - keepValue(a) * 0.8))[0]
+                if (yjPick) payload.cardIds = [yjPick.id]
+                else payload.action = 'decline'
+                break
+            }
+            // 峻攻（高览）：弃置 X 张牌，优先废牌（手牌与装备区都算）
+            if (skillId_pick === 'gaolan_jungong_discard') {
+                const jgCost = Math.max(1, (ctx.jungongCost as number) ?? 1)
+                const jgAll = [...self.hand, ...equippedCards(self)]
+                    .filter((c) => candidates.length === 0 || candidates.includes(c.id))
+                    .sort((a, b) => keepValue(a) - keepValue(b))
+                payload.cardIds = jgAll.slice(0, Math.min(jgCost, jgAll.length)).map((c) => c.id)
+                if (payload.cardIds.length < jgCost) payload.action = 'decline'
                 break
             }
             if (skillId_pick === 'doudizhu_feiyang') {
@@ -3821,6 +3861,40 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
     if (knowsSkill(active, 'weiyan_qimou') && !limitedUsed('weiyan_qimou')
         && active.hp >= 3 && enemies.length > 0) {
         offer('skill:qimou', 52, ['burst'], () => useSkill('weiyan_qimou', []))
+    }
+    // ── 新增武将（田畴 / 高览 / 崔琰）主动技 ──
+    // 善刀（田畴）：各取一张牌置顶，视为对这些人【五谷丰登】、对其余角色【万箭齐发】
+    if (knowsSkill(active, 'tianchou_shandao') && !active.shandaoUsedPhase
+        && state.generals.filter(g => g.alive && (g.hand.length > 0
+            || Object.values(g.equip).some(Boolean) || g.judgeZone.length > 0)).length >= 2) {
+        const shandaoPick = state.generals
+            .map((g, i) => ({ g, i }))
+            .filter(({ g }) => g.alive && (g.hand.length > 0
+                || Object.values(g.equip).some(Boolean) || g.judgeZone.length > 0))
+            .sort((a, b) => Number(isEnemy(state, b.g, playerId)) - Number(isEnemy(state, a.g, playerId)))
+            .slice(0, 2)
+        if (shandaoPick.length > 0) {
+            offer('skill:shandao', 56 + shandaoPick.filter(({ g }) => isEnemy(state, g, playerId)).length * 4,
+                ['value', 'control'],
+                () => useSkill('tianchou_shandao', shandaoPick.map(({ i }) => i)))
+        }
+    }
+    // 峻攻（高览）：X 递增，本阶段第一次（弃 1 张）最划算
+    if (knowsSkill(active, 'gaolan_jungong')
+        && active.jungongDisabledTurn !== state.turnSerial
+        && (active.jungongCount ?? 0) === 0 && enemies.length > 0) {
+        const jungongJunk = [...hand].sort((a, b) => keepValue(a) - keepValue(b))[0]
+        if (jungongJunk) {
+            offer('skill:jungong', 50 + (active.hp > 2 ? 4 : 0), ['burst'],
+                () => useSkill('gaolan_jungong', []))
+        }
+    }
+    // 尊嫡（崔琰）：弃一张废牌判定，黑则目标摸三张、红则移装备
+    if (knowsSkill(active, 'cuiyan_zundi') && !active.zundiUsedPhase && hand.length >= 2) {
+        const zundiCost = [...hand].sort((a, b) => keepValue(a) - keepValue(b))[0]
+        if (zundiCost) {
+            offer('skill:zundi', 44, ['value'], () => useSkill('cuiyan_zundi', [self], [zundiCost.id]))
+        }
     }
     // 飞军（王平）：弃废牌，令敌方交牌或弃其装备
     if (knowsSkill(active, 'wangping_feijun') && !onceUsed('wangping_feijun') && hand.length >= 2) {
@@ -5594,6 +5668,41 @@ function pickSkillOptionRaw(
                 if (gzHit) return gzHit.action
             }
             return options[0]?.action ?? 'decline'
+        }
+        // ══ 新增武将（田畴 / 高览 / 崔琰 / 张翼）══
+        case 'gaolan_jungong': {
+            // 峻攻：手里废牌多于代价 +2 时弃牌，否则体力充足就失去体力
+            const jgCost = (ctx.jungongCost as number) ?? 1
+            const jgPool = self ? [...self.hand, ...equippedCards(self)] : []
+            if (has('discard') && jgPool.length > jgCost + 2) return 'discard'
+            if (has('loseHp') && (self?.hp ?? 0) > jgCost + 1) return 'loseHp'
+            if (has('discard')) return 'discard'
+            return has('loseHp') ? 'loseHp' : 'decline'
+        }
+        case 'zhangyi_yiyi': {
+            // 执义：能斩杀就用【杀】；受伤就用【桃】；否则摸一张牌
+            const slashOpt = options.find((o) => o.action === 'use:attack'
+                || o.action === 'use:fire_slash' || o.action === 'use:thunder_slash')
+            const killable = !!slashOpt && !!self && state.generals.some((g) =>
+                g.alive && g !== self && isEnemy(state, g, playerId) && g.hp <= 1
+                && getAttackRange(self, g, state.generals).inRange)
+            if (killable && slashOpt) return slashOpt.action
+            if (has('use:peach') && self && self.hp < self.maxHp) return 'use:peach'
+            return has('draw') ? 'draw' : (options[0]?.action ?? 'decline')
+        }
+        case 'cuiyan_yajun_place': {
+            // 雅俊：把点数更大的那张拼点牌放到牌堆顶（下一步自己摸到）
+            let bestAction: string | undefined
+            let bestValue = -1
+            for (const opt of options) {
+                if (!opt.action.startsWith('place:')) continue
+                const card = state.discard.find((c) => c.id === opt.action.slice(6))
+                if (card && card.value > bestValue) {
+                    bestAction = opt.action
+                    bestValue = card.value
+                }
+            }
+            return bestAction ?? (has('decline') ? 'decline' : (options[0]?.action ?? 'decline'))
         }
         default:
             return options[0]?.action ?? 'decline'

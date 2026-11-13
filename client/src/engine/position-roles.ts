@@ -91,6 +91,9 @@ export const POSITION_ROLE_BY_ID: Record<string, PositionRole> = {
     zhugejin: 'support',
     zhugejin_jing: 'support',
     simayi: 'support',
+    // 新增武将：田畴（善刀全场发牌后压制）、崔琰（雅俊/尊嫡补牌与移装备）
+    tianchou: 'support',
+    cuiyan: 'support',
 
     // 牌差（48）
     lidian_jie: 'card',
@@ -190,6 +193,8 @@ export const POSITION_ROLE_BY_ID: Record<string, PositionRole> = {
     jiangwei_mou: 'blade',
     wenyang: 'blade',
     wujing: 'blade',
+    // 新增武将：高览（峻攻视为使用【杀】、等力补牌）
+    gaolan: 'blade',
 
     // 直伤（28）
     dianwei_jie: 'burst',
@@ -282,6 +287,8 @@ export const POSITION_ROLE_BY_ID: Record<string, PositionRole> = {
     yujin_mou: 'tank',
     zhoutai: 'tank',
     lukang: 'tank',
+    // 新增武将：张翼（执义，4 血稳定摸牌/复用基本牌）
+    zhangyi: 'tank',
 
     // 回复（10）
     zhaoyun_jing: 'heal',
