@@ -25,6 +25,7 @@ function oddityTooltip(o: OddityOption) {
 export default function PairPickPage() {
     const navigate = useNavigate()
     const gameState = useGameStore((s) => s.gameState)
+    const hotseat = useGameStore((s) => s.hotseat)
     const pick = gameState?.pairPick
     const humanSide = gameState?.pairHumanSide
     const phase = gameState?.phase
@@ -57,7 +58,7 @@ export default function PairPickPage() {
     }
 
     const mySeats = pairSeatsOf(humanSide)
-    const isHumanSeat = (seat: number) => mySeats.includes(seat)
+    const isHumanSeat = (seat: number) => hotseat || mySeats.includes(seat)
     const allPicked = pick.picked.every((id) => id !== null)
     const oddities = pick.oddities
     const oddityPicked = pick.oddityPicked

@@ -7,8 +7,11 @@ import HotseatSplit from './HotseatSplit'
 export default function HotseatGamePage() {
     const views = useGameStore((s) => s.hotseatViews)
     if (!views?.warm || !views?.cool) return null
+    const ddz = views.warm.mode === 'doudizhu'
     return (
         <HotseatSplit
+            warmLabel={ddz ? '地主' : '暖方'}
+            coolLabel={ddz ? '农民' : '冷方'}
             warm={<GamePage view={views.warm} faction={Faction.WARM} />}
             cool={<GamePage view={views.cool} faction={Faction.COOL} />}
         />

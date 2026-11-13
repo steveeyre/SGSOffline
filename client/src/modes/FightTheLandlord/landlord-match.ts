@@ -14,7 +14,7 @@ import { drawCards } from '../../engine/deck'
 import { addLog, createGeneralInstance, hasSkillOnGeneral } from '../../engine/game-state'
 import { triggerShuzhiChoose } from '../../engine/game-actions'
 import { getGeneralById } from '../../engine/generals'
-import { AI_PLAYER_ID, HUMAN_PLAYER_ID } from '../../engine/local-match'
+import { AI_PLAYER_ID, HUMAN_PLAYER_ID, HUMAN2_PLAYER_ID, isHotseatState } from '../../engine/local-match'
 import { newRandomSeed, setRandomSeed } from '../../engine/rng'
 import { runTurnStart } from '../../engine/turn-manager'
 import { resetSkillUses } from '../../engine/skill-limit'
@@ -34,20 +34,21 @@ export function createLandlordMatch(
     oddityMode = false,
     skillLimitRule?: SkillLimitRule,
     weaponEnhance?: boolean,
+    hotseat = false,
 ): GameState {
     setRandomSeed(seed)
-    const landlordPlayerId = side === 'landlord' ? HUMAN_PLAYER_ID : AI_PLAYER_ID
-    const farmerPlayerId = side === 'farmers' ? HUMAN_PLAYER_ID : AI_PLAYER_ID
+    const landlordPlayerId = hotseat ? HUMAN_PLAYER_ID : (side === 'landlord' ? HUMAN_PLAYER_ID : AI_PLAYER_ID)
+    const farmerPlayerId = hotseat ? HUMAN2_PLAYER_ID : (side === 'farmers' ? HUMAN_PLAYER_ID : AI_PLAYER_ID)
     const players: Record<string, Player> = {
         [landlordPlayerId]: {
             id: landlordPlayerId,
-            nickname: side === 'landlord' ? '我（地主）' : 'AI（地主）',
+            nickname: hotseat ? '地主' : (side === 'landlord' ? '我（地主）' : 'AI（地主）'),
             faction: Faction.WARM,
             connected: true,
         },
         [farmerPlayerId]: {
             id: farmerPlayerId,
-            nickname: side === 'farmers' ? '我（农民）' : 'AI（农民）',
+            nickname: hotseat ? '农民' : (side === 'farmers' ? '我（农民）' : 'AI（农民）'),
             faction: Faction.COOL,
             connected: true,
         },
@@ -56,7 +57,7 @@ export function createLandlordMatch(
     const landlordPick: LandlordPickState = { pools, picked: [null, null, null] }
     if (oddityMode) {
         // 玩家先选、电脑后选：人类席位的候选此刻抽好，AI 席位等玩家选完后由 aiLandlordDraft 现场抽取
-        const humanSeats = new Set(side === 'landlord' ? [0] : [1, 2])
+        const humanSeats = new Set(hotseat ? [0, 1, 2] : (side === 'landlord' ? [0] : [1, 2]))
         const used: string[] = []
         landlordPick.oddities = pools.map((pool, i) => {
             if (!autoDraft && !humanSeats.has(i)) return []
@@ -75,7 +76,7 @@ export function createLandlordMatch(
         oddityMode: oddityMode || undefined,
         skillLimitRule,
         weaponEnhance,
-        landlordHumanSide: side,
+        landlordHumanSide: hotseat ? 'landlord' : side,
         players,
         warmPlayerId: landlordPlayerId,
         coolPlayerId: farmerPlayerId,
@@ -95,7 +96,7 @@ export function createLandlordMatch(
     addLog(state, '斗地主模式：地主 6 选 1，农民各 5 选 1，同时进行')
     if (oddityMode) addLog(state, '奇技模式：每名角色另有 3 个奇技候选，选定武将时一并选择')
     // autoDraft=false 时把 AI 席位的选将留给调用方（自对弈/校测构造固定阵容用）
-    if (autoDraft) aiLandlordDraft(state, () => setupLandlordPlay(state))
+    if (autoDraft && !hotseat) aiLandlordDraft(state, () => setupLandlordPlay(state))
     return state
 }
 
@@ -139,7 +140,8 @@ function commitLandlordPick(
     if (!pick || state.phase !== GamePhase.GENERAL_PICK) return { error: '不在选将阶段' }
     if (poolIndex < 0 || poolIndex > 2) return { error: '无效的选将席位' }
     const humanSide = state.landlordHumanSide ?? 'landlord'
-    const isMine = poolIndex === 0 ? humanSide === 'landlord' : humanSide === 'farmers'
+    const isMine = isHotseatState(state)
+        || (poolIndex === 0 ? humanSide === 'landlord' : humanSide === 'farmers')
     if (!isMine) return { error: '该席位由 AI 选择' }
     if (pick.picked[poolIndex]) return { error: '该席位已选好武将' }
     if (fromPointPick) {

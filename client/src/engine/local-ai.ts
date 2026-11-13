@@ -980,11 +980,6 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
                     payload.action = 'confirm'
                     break
                 }
-                case 'zhugejin_jing_hongyuan':
-                case 'zhugejin_jing_mingzhe': {
-                    payload.action = 'confirm'
-                    break
-                }
                 case 'zhugejin_hongyuan': {
                     const hyCandidates = (ctx.hongyuanCandidates as number[]) ?? []
                     if (hyCandidates.some((idx) => state.generals[idx]?.alive)) payload.action = 'confirm'
@@ -2349,6 +2344,11 @@ export function aiRespond(state: GameState, playerId: string = AI_PLAYER_ID): bo
             }
             if (skillId_pick === 'wujing_heji') {
                 // 合击：使用一张【杀】或【决斗】，挑价值最低的那张
+                payload.cardIds = lowestValueCards(pool, 1)
+                break
+            }
+            if (skillId_pick === 'wenyang_quedi_discard') {
+                // 却敌：弃最没用的一张基本牌换伤害+1
                 payload.cardIds = lowestValueCards(pool, 1)
                 break
             }
@@ -3804,6 +3804,19 @@ function aiPlayOne(state: GameState, playerId: string, collectOnly = false): boo
                 () => useSkill('huaxiong_shizhan', [shizhanTarget.index]))
         }
     }
+    // 椎锋（文鸯）：失去1点体力视为使用【决斗】，每阶段至多两次
+    if (knowsSkill(active, 'wenyang_zhuifeng')
+        && (active as any).zhuifengDisabledTurn !== state.turnSerial
+        && active.skillsUsedThisTurn.filter(id => id === 'wenyang_zhuifeng').length < 2
+        && active.hp >= 2 && enemies.length > 0) {
+        const zhuifengTarget = enemies
+            .filter(({ g }) => g.hand.filter(isSlash).length <= 1)
+            .sort((a, b) => enemyTargetScore(state, b.g) - enemyTargetScore(state, a.g))[0]
+        if (zhuifengTarget) {
+            offer('skill:zhuifeng', 40, ['burst'],
+                () => useSkill('wenyang_zhuifeng', [zhuifengTarget.index]))
+        }
+    }
     // 奇谋（魏延限定技）：血量充足时用体力换距离与杀次数
     if (knowsSkill(active, 'weiyan_qimou') && !limitedUsed('weiyan_qimou')
         && active.hp >= 3 && enemies.length > 0) {
@@ -5206,6 +5219,17 @@ function pickSkillOptionRaw(
         if (!self || !zwCaster?.alive || !zwTarget?.alive) return 'decline'
         if (!isEnemy(state, zwCaster, playerId) || isEnemy(state, zwTarget, playerId)) return 'decline'
         return has('negate') ? 'negate' : 'decline'
+    }
+    // 却敌（文鸯）：能打伤害时优先加伤；两项都选只在体力上限充足时做
+    if (skillId === 'wenyang_quedi') {
+        const qdTarget = state.generals[(ctx.quediTargetIndex as number) ?? -1]
+        if (!qdTarget?.alive) return 'decline'
+        const basics = self?.hand.filter(c => c.category === CardCategory.BASIC).length ?? 0
+        if (has('both') && (self?.maxHp ?? 0) > 3 && basics > 0) return 'both'
+        if (has('bonus') && basics > 0 && (qdTarget.hp <= 2 || qdTarget.hand.length <= 1)) return 'bonus'
+        if (has('gain')) return 'gain'
+        if (has('bonus')) return 'bonus'
+        return 'decline'
     }
     // 义绝（界关羽）：令目标回复体力是代价，只对己方发动
     if (skillId === 'guanyu_jie_yijue_heal') {

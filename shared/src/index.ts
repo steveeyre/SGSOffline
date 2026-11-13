@@ -354,6 +354,18 @@ export interface GeneralInstance {
     zhongjiUses?: number
     zhongjiTurn?: number
 
+    // ── 文鸯状态位（均可选） ──
+    /** 却敌：本回合的发动次数、上限加成与所属回合序号 */
+    quediCount?: number
+    quediExtra?: number
+    quediTurn?: number
+    /** 却敌：已选择“伤害+1”、等待结算的那张牌 */
+    quediBonusCardId?: string
+    /** 椎锋：本次视为使用的【决斗】牌 id，若因此受伤则防止 */
+    zhuifengDuelCardId?: string
+    /** 椎锋：技能失效的回合序号（本阶段） */
+    zhuifengDisabledTurn?: number
+
     // ── 洛书版第二批武将状态位（均可选） ──
     /** 怀橘（陆绩）：持有“橘”标记数 */
     orangeMarks?: number

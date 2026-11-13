@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useGameStore } from '../store/gameStore'
-import { getResumeInfo, resumeLocalMatch, startLocalHotseatMatch, startLocalLandlordMatch, startLocalMatch, startLocalPairMatch, type ResumeInfo } from '../engine/local-dispatch'
+import { getResumeInfo, resumeLocalMatch, startLocalHotseatMatch, startLocalLandlordHotseatMatch, startLocalLandlordMatch, startLocalMatch, startLocalPairHotseatMatch, startLocalPairMatch, type ResumeInfo } from '../engine/local-dispatch'
 import type { LandlordSide } from '../modes/FightTheLandlord/landlord-match'
 import { getDeckPreference, setDeckPreference, type DeckType } from '../engine/cards'
 import { getGeneralPool, getPoolPreference, setPoolPreference, type GeneralPoolVersion } from '../engine/generals'
@@ -136,12 +136,24 @@ export default function LobbyPage() {
         const stage = info.phase === GamePhase.PLAYING
             ? `第 ${info.round} 回合`
             : info.phase === GamePhase.DEPLOY ? '部署中' : '选将中'
-        return `${modeName} · ${stage}`
+        return `${modeName}${info.hotseat ? '（本地对战）' : ''} · ${stage}`
     }
 
     function handleStart() {
         const seed = parseSeed()
         if (seed === null) return
+        if (side === 'hotseat') {
+            if (mode === GameMode.DOUDIZHU) {
+                startLocalLandlordHotseatMatch(seed, oddity, skillLimitRule, weaponEnhance)
+                return
+            }
+            if (mode === GameMode.HUANLE_SHUANG) {
+                startLocalPairHotseatMatch(seed, oddity, skillLimitRule, weaponEnhance)
+                return
+            }
+            startLocalHotseatMatch(seed, skillLimitRule, weaponEnhance)
+            return
+        }
         if (mode === GameMode.DOUDIZHU) {
             const landlordSide: LandlordSide = side === 'landlord' || side === 'farmers'
                 ? side
@@ -154,10 +166,6 @@ export default function LobbyPage() {
                 : side === 'warm' ? Faction.WARM
                     : (Math.random() < 0.5 ? Faction.COOL : Faction.WARM)
             startLocalPairMatch(faction, seed, oddity, skillLimitRule, weaponEnhance)
-            return
-        }
-        if (side === 'hotseat') {
-            startLocalHotseatMatch(seed, skillLimitRule, weaponEnhance)
             return
         }
         const faction = side === 'cool' ? Faction.COOL
@@ -309,12 +317,14 @@ export default function LobbyPage() {
                                     {sideButton('random', '随机')}
                                     {sideButton('landlord', '执地主')}
                                     {sideButton('farmers', '执农民')}
+                                    {sideButton('hotseat', '本地对战')}
                                 </>
                             ) : mode === GameMode.HUANLE_SHUANG ? (
                                 <>
                                     {sideButton('random', '随机')}
                                     {sideButton('cool', '执冷（1、4 号位）')}
                                     {sideButton('warm', '执暖（2、3 号位）')}
+                                    {sideButton('hotseat', '本地对战')}
                                 </>
                             ) : (
                                 <>

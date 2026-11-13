@@ -261,6 +261,52 @@ export function startLocalHotseatMatch(seed?: number, skillLimitRule?: SkillLimi
     publish()
 }
 
+/** 欢乐成双本地对战：暖方 HUMAN_PLAYER_ID、冷方 HUMAN2_PLAYER_ID，双方同屏操作 */
+export function startLocalPairHotseatMatch(seed?: number, oddityMode = false, skillLimitRule?: SkillLimitRule, weaponEnhance?: boolean): void {
+    hotseatMode = true
+    activeLandlordSide = null
+    activePairSide = null
+    activeGame = createPairMatch(Faction.WARM, seed, false, oddityMode, skillLimitRule, weaponEnhance, true)
+    beginMatchLog(activeGame, getRandomSeed(), 'huanle_shuang', { hotseat: true, humanFaction: Faction.WARM })
+    const store = useGameStore.getState()
+    store.setHotseat(true)
+    store.setHotseatViews(null)
+    store.setMode(GameMode.HUANLE_SHUANG)
+    store.setLandlordSide(null)
+    store.setPlayerId(HUMAN_PLAYER_ID)
+    store.setNickname('本地对战')
+    store.setRoomCode('local')
+    store.setMyFaction(Faction.WARM)
+    store.setIsSpectator(false)
+    store.setWinnerFaction(null)
+    store.setError(null)
+    store.clearSelection()
+    publish()
+}
+
+/** 斗地主本地对战：地主 HUMAN_PLAYER_ID、农民 HUMAN2_PLAYER_ID，双方同屏操作 */
+export function startLocalLandlordHotseatMatch(seed?: number, oddityMode = false, skillLimitRule?: SkillLimitRule, weaponEnhance?: boolean): void {
+    hotseatMode = true
+    activeLandlordSide = null
+    activePairSide = null
+    activeGame = createLandlordMatch('landlord', seed, false, oddityMode, skillLimitRule, weaponEnhance, true)
+    beginMatchLog(activeGame, getRandomSeed(), 'doudizhu', { hotseat: true, humanFaction: Faction.WARM })
+    const store = useGameStore.getState()
+    store.setHotseat(true)
+    store.setHotseatViews(null)
+    store.setMode(GameMode.DOUDIZHU)
+    store.setLandlordSide(null)
+    store.setPlayerId(HUMAN_PLAYER_ID)
+    store.setNickname('本地对战')
+    store.setRoomCode('local')
+    store.setMyFaction(Faction.WARM)
+    store.setIsSpectator(false)
+    store.setWinnerFaction(null)
+    store.setError(null)
+    store.clearSelection()
+    publish()
+}
+
 /** 斗地主：本地玩家执地主或农民（两个农民同屏控制） */
 export function startLocalLandlordMatch(side: LandlordSide, seed?: number, oddityMode = false, skillLimitRule?: SkillLimitRule, weaponEnhance?: boolean): void {
     hotseatMode = false
@@ -339,7 +385,7 @@ export function dispatchLocalPairPick(seat: number, generalId: string): void {
     const result = pairPickGeneral(state, seat, generalId)
     if ('error' in result) return useGameStore.getState().setError(result.error)
     // 人类席位选完后再让 AI 补，避免 AI 抢先占走玩家想点将的武将
-    if (pairHumanDraftDone(state)) aiPairDraft(state, () => setupPairPlay(state))
+    if (!hotseatMode && pairHumanDraftDone(state)) aiPairDraft(state, () => setupPairPlay(state))
     // 规则 AI 补齐的选将轨迹记进对局日志
     recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
@@ -354,7 +400,7 @@ export function dispatchLocalPairConfirmPick(seat: number, generalId: string, od
     const decisionSnapshot = captureSnapshot(state)
     const result = pairConfirmPick(state, seat, generalId, oddityId)
     if ('error' in result) return useGameStore.getState().setError(result.error)
-    if (pairHumanDraftDone(state)) aiPairDraft(state, () => setupPairPlay(state))
+    if (!hotseatMode && pairHumanDraftDone(state)) aiPairDraft(state, () => setupPairPlay(state))
     recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
     publish()
@@ -368,7 +414,7 @@ export function dispatchLocalPairPointPick(seat: number, generalId: string, oddi
     const decisionSnapshot = captureSnapshot(state)
     const result = pairPointPick(state, seat, generalId, oddityId)
     if ('error' in result) return useGameStore.getState().setError(result.error)
-    if (pairHumanDraftDone(state)) aiPairDraft(state, () => setupPairPlay(state))
+    if (!hotseatMode && pairHumanDraftDone(state)) aiPairDraft(state, () => setupPairPlay(state))
     recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
     publish()
@@ -382,7 +428,7 @@ export function dispatchLocalLandlordPointPick(poolIndex: number, generalId: str
     if ('error' in result) return useGameStore.getState().setError(result.error)
     const logFrom = state.log.length
     const decisionSnapshot = captureSnapshot(state)
-    if (landlordHumanDraftDone(state)) aiLandlordDraft(state, () => setupLandlordPlay(state))
+    if (!hotseatMode && landlordHumanDraftDone(state)) aiLandlordDraft(state, () => setupLandlordPlay(state))
     recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
     publish()
@@ -396,7 +442,7 @@ export function dispatchLocalLandlordConfirmPick(poolIndex: number, generalId: s
     if ('error' in result) return useGameStore.getState().setError(result.error)
     const logFrom = state.log.length
     const decisionSnapshot = captureSnapshot(state)
-    if (landlordHumanDraftDone(state)) aiLandlordDraft(state, () => setupLandlordPlay(state))
+    if (!hotseatMode && landlordHumanDraftDone(state)) aiLandlordDraft(state, () => setupLandlordPlay(state))
     recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
     publish()
@@ -411,7 +457,7 @@ export function dispatchLocalLandlordPick(poolIndex: number, generalId: string):
     // 人类席位选完后再让 AI 补齐
     const logFrom = state.log.length
     const decisionSnapshot = captureSnapshot(state)
-    if (landlordHumanDraftDone(state)) aiLandlordDraft(state, () => setupLandlordPlay(state))
+    if (!hotseatMode && landlordHumanDraftDone(state)) aiLandlordDraft(state, () => setupLandlordPlay(state))
     recordAiDecision(state, decisionSnapshot, logFrom)
     useGameStore.getState().setError(null)
     publish()
@@ -547,6 +593,15 @@ export function rematchLocalMatch(opts: LocalRematchOptions = {}): void {
     const skillLimitRule = state?.skillLimitRule
     const weaponEnhance = state?.weaponEnhance
     if (hotseatMode) {
+        const mode = state?.mode
+        if (mode === GameMode.HUANLE_SHUANG) {
+            startLocalPairHotseatMatch(opts.seed, oddity, skillLimitRule, weaponEnhance)
+            return
+        }
+        if (mode === GameMode.DOUDIZHU) {
+            startLocalLandlordHotseatMatch(opts.seed, oddity, skillLimitRule, weaponEnhance)
+            return
+        }
         startLocalHotseatMatch(opts.seed, skillLimitRule, weaponEnhance)
         return
     }
@@ -1098,7 +1153,7 @@ export function resumeLocalMatch(): boolean {
 }
 
 function nicknameForResume(save: ResumeSave): string {
-    if (save.hotseat) return '暖方'
+    if (save.hotseat) return '本地对战'
     if (save.mode === GameMode.DOUDIZHU) return save.landlordSide === 'farmers' ? '农民' : '地主'
     if (save.mode === GameMode.HUANLE_SHUANG) return save.humanFaction === Faction.COOL ? '冷方' : '暖方'
     return '我'

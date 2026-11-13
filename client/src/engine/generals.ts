@@ -3572,6 +3572,26 @@ export const GENERALS: GeneralDefinition[] = [
             },
         ],
     },
+    {
+        id: 'wenyang', name: '文鸯', maxHp: 4, gender: 'male', kingdom: 'wei',
+        skills: [
+            {
+                id: 'wenyang_quedi', name: '却敌',
+                description: '每回合限一次，当你使用【杀】或【决斗】指定一名角色为唯一目标后，你可以选择一项：1.获得该角色的一张手牌；2.弃置一张基本牌，令此牌造成的伤害+1。你可以同时选择两项，若如此做，你减1点体力上限。',
+                type: SkillType.PASSIVE, trigger: SkillTrigger.ON_USE_CARD,
+            },
+            {
+                id: 'wenyang_qiujue', name: '仇决',
+                description: '锁定技，当你杀死其他角色后，你加1点体力上限并摸两张牌，然后你本回合发动“却敌”的次数上限+1。',
+                type: SkillType.LOCKED, trigger: SkillTrigger.ON_KILLED,
+            },
+            {
+                id: 'wenyang_zhuifeng', name: '椎锋',
+                description: '出牌阶段限两次，你可以失去1点体力，视为使用一张【决斗】，然后若你因此受到伤害，你防止此伤害且本阶段此技能失效。',
+                type: SkillType.ACTIVE, trigger: SkillTrigger.ACTIVE,
+            },
+        ],
+    },
 ]
 
 /** 觉醒/转化获得、但未挂在武将原生技能列表里的技能（仅用于展示与查询） */
@@ -3767,6 +3787,7 @@ export const BRAWL_POOL_IDS: string[] = [
     'lisu', 'caozhang_jie', 'shamoke', 'caochun',
     'zhangmancheng', 'caoxing', 'dongcheng',
     'zhaoyun_sp', 'machao_sp', 'jiangwei_mou',
+    'wenyang',
     // 直伤（24）
     'dianwei_jie', 'huanggai_jie', 'yuejin', 'zhugeke', 'zhangjiao_jie', 'jiaxu_jie',
     'diaochan_jie', 'caifuren_jie', 'liuchen', 'huaxiong_jie', 'cenhun', 'guanyinping',

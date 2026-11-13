@@ -524,6 +524,8 @@ function executeDeferredTrickEffect(state: GameState, effect: DeferredTrickEffec
                     },
                 })
                 addLog(state, `【${getGeneralName(user)}】对【${getGeneralName(target)}】发起【决斗】`)
+                // 却敌（文鸯）：决斗指定唯一目标后（放在出杀响应之前询问）
+                maybeWenyangQuedi(state, user, effect.extra?.duelCardId, target, 'duel')
             }
             break
         }
@@ -3147,6 +3149,48 @@ function slashDamageOpts(attacker: GeneralInstance | null, attackCard?: Card, en
     return { nature, fromSlash: true, ignoresArmor }
 }
 
+/** 却敌（文鸯）：使用【杀】或【决斗】指定唯一目标后，询问是否获得手牌 / 弃基本牌加伤 */
+function maybeWenyangQuedi(
+    state: GameState,
+    general: GeneralInstance,
+    cardId: string,
+    target: GeneralInstance | undefined,
+    kind: 'slash' | 'duel',
+): void {
+    if (!hasSkill(general, 'wenyang_quedi')) return
+    if (!target || target === general || !target.alive) return
+    if (general.quediTurn !== state.turnSerial) {
+        general.quediTurn = state.turnSerial
+        general.quediCount = 0
+        general.quediExtra = 0
+    }
+    const limit = 1 + (general.quediExtra ?? 0)
+    if ((general.quediCount ?? 0) >= limit) return
+    const canGain = target.hand.length > 0
+    const canBonus = !!cardId && general.hand.some(c => c.category === CardCategory.BASIC)
+    if (!canGain && !canBonus) return
+    const options = [
+        ...(canGain ? [{ action: 'gain', label: '获得其一张手牌' }] : []),
+        ...(canBonus ? [{ action: 'bonus', label: '弃一张基本牌，令此牌伤害+1' }] : []),
+        ...(canGain && canBonus
+            ? [{ action: 'both', label: '两项都选（减1点体力上限）' }]
+            : []),
+    ]
+    state.pendingResponseQueue.unshift({
+        type: ResponseType.SKILL_ACTIVATE_CONFIRM,
+        targetGeneralIndex: indexOfGeneral(state, general),
+        context: {
+            skillId: 'wenyang_quedi',
+            skillName: '却敌',
+            description: `${kind === 'duel' ? '【决斗】' : '【杀】'}的目标为【${getGeneralName(target)}】`,
+            options,
+            quediTargetIndex: indexOfGeneral(state, target),
+            quediCardId: cardId,
+        },
+    })
+    addLog(state, `【${getGeneralName(general)}】可发动【却敌】`)
+}
+
 export function dealDamage(
     state: GameState,
     attacker: GeneralInstance | null,
@@ -3177,6 +3221,13 @@ export function dealDamage(
     }
 ): void {
     if (!target.alive) return
+    // ── 椎锋（文鸯）：因发行【决斗】即将受到伤害时，防止此伤害且本阶段技能失效
+    if (target.zhuifengDuelCardId && damageCardId === target.zhuifengDuelCardId) {
+        target.zhuifengDuelCardId = undefined
+        target.zhuifengDisabledTurn = state.turnSerial
+        addLog(state, `【${getGeneralName(target)}】【椎锋】防止了此伤害，本阶段【椎锋】失效`)
+        return
+    }
     // ── 修好（邓芝）：每回合限一次，造成/受到其他角色的伤害时，可防止此伤害，然后伤害来源摸两张牌
     if (!(opts as any)?.skipXiuhao && amount > 0 && attacker && attacker !== target
         && attacker.alive && target.alive) {
@@ -3215,6 +3266,12 @@ export function dealDamage(
         attacker.qingxiBonusTargets = attacker.qingxiBonusTargets!.filter(i => i !== state.generals.indexOf(target))
         if (attacker.qingxiBonusTargets.length === 0) attacker.qingxiBonusCardId = undefined
         addLog(state, `【${getGeneralName(attacker)}】【倾袭】此伤害+1`)
+    }
+    // 却敌（文鸯）：已选择弃基本牌加伤的那张牌，伤害结算时补上
+    if (amount > 0 && attacker && damageCardId && attacker.quediBonusCardId === damageCardId) {
+        amount += 1
+        attacker.quediBonusCardId = undefined
+        addLog(state, `【${getGeneralName(attacker)}】【却敌】此牌造成的伤害+1`)
     }
     const nature = opts?.nature ?? 'normal'
 
@@ -4521,6 +4578,20 @@ function handleDeath(
         }
     }
     state.turnDeathCount = (state.turnDeathCount ?? 0) + 1
+
+    // 仇决（文鸯）：杀死其他角色后，加1点体力上限、摸两张牌，本回合【却敌】次数上限+1
+    if (attacker && attacker !== target && attacker.alive && hasSkill(attacker, 'wenyang_qiujue')) {
+        attacker.maxHp += 1
+        if (attacker.quediTurn !== state.turnSerial) {
+            attacker.quediTurn = state.turnSerial
+            attacker.quediCount = 0
+            attacker.quediExtra = 0
+        }
+        attacker.quediExtra = (attacker.quediExtra ?? 0) + 1
+        const qjDrawn = drawCards(state, 2)
+        attacker.hand.push(...qjDrawn)
+        addLog(state, `【${getGeneralName(attacker)}】发动【仇决】，加1点体力上限（${attacker.maxHp}）并摸${qjDrawn.length}张牌，本回合【却敌】次数上限+1`)
+    }
     // 焚心（灵雎）
     triggerLingjuFenxin(state, attacker, target)
 
@@ -5871,6 +5942,8 @@ function handleBasicCard(
 
         // 倾袭（界曹休）：使用【杀】时，由所有目标依次选择弃牌或伤害+1
         maybeJieQingxiOnUse(state, general, card, targets)
+        // 却敌（文鸯）：使用【杀】指定唯一目标后（放在 DODGE 之前询问）
+        if (targets.length === 1) maybeWenyangQuedi(state, general, card.id, targets[0], 'slash')
 
         // 谏征（秦宓）/ 龙临（闪赵云）：须先于【闪】结算，故在整个目标循环之后入队
         triggerJianzheng(state, general, card, targets)
@@ -6085,6 +6158,8 @@ function handleWushengAttack(
     }
     // 倾袭（界曹休）：使用【杀】时，由所有目标依次选择弃牌或伤害+1
     maybeJieQingxiOnUse(state, general, card, targets)
+    // 却敌（文鸯）：使用【杀】指定唯一目标后（放在 DODGE 之前询问）
+    if (targets.length === 1) maybeWenyangQuedi(state, general, card.id, targets[0], 'slash')
     return
 }
 
@@ -8463,6 +8538,24 @@ function handleUseSkillImpl(
             return
         }
 
+        // ── 椎锋（文鸯）：限两次，失去1点体力，视为使用一张【决斗】
+        case 'wenyang_zhuifeng': {
+            if (!hasSkill(general, 'wenyang_zhuifeng')) return { error: '你没有此技能' }
+            if (general.zhuifengDisabledTurn === state.turnSerial) return { error: '本阶段【椎锋】已失效' }
+            if (general.skillsUsedThisTurn.filter((id) => id === 'wenyang_zhuifeng').length >= 2) {
+                return { error: '本阶段【椎锋】已使用两次' }
+            }
+            if (targets.length !== 1) return { error: '请选择1名其他角色' }
+            const zfTarget = targets[0]
+            if (zfTarget === general || !zfTarget.alive) return { error: '目标无效' }
+            general.skillsUsedThisTurn.push('wenyang_zhuifeng')
+            loseHp(state, general, 1)
+            addLog(state, `【${name}】发动【椎锋】，失去1点体力`)
+            if (!general.alive || general.hp <= 0) return
+            useVirtualDuel(state, general, state.generals.indexOf(zfTarget), '椎锋', true)
+            return
+        }
+
         // ── 势斩（界华雄）：令一名其他角色视为对你使用【决斗】，每阶段限两次
         case 'huaxiong_shizhan': {
             if (!hasSkill(general, 'huaxiong_shizhan')) return { error: '你没有此技能' }
@@ -9852,6 +9945,44 @@ function resolveSkillOption(
     if (expB !== EXP_UNHANDLED) return expB
 
     switch (skillId) {
+        // ── 却敌（文鸯）：选择获得手牌 / 弃基本牌加伤 / 两项都选
+        case 'wenyang_quedi': {
+            state.pendingResponseQueue.shift()
+            if (action === 'decline') return
+            const target = state.generals[(ctx.quediTargetIndex as number) ?? -1]
+            const cardId = ctx.quediCardId as string
+            if (!target?.alive) return
+            general.quediCount = (general.quediCount ?? 0) + 1
+            const wantGain = action === 'gain' || action === 'both'
+            const wantBonus = action === 'bonus' || action === 'both'
+            if (wantGain && target.hand.length > 0) {
+                const gained = target.hand.splice(randomInt(target.hand.length), 1)[0]
+                general.hand.push(gained)
+                triggerFenji(state, target, general)
+                addLog(state, `【${name}】发动【却敌】，获得【${getGeneralName(target)}】的一张手牌`)
+            }
+            if (!wantBonus) return
+            const basics = general.hand.filter(c => c.category === CardCategory.BASIC).map(c => c.id)
+            if (basics.length === 0) {
+                addLog(state, `【${name}】没有基本牌可弃置，【却敌】的伤害加成未生效`)
+                return
+            }
+            state.pendingResponseQueue.unshift({
+                type: ResponseType.SKILL_PICK_CARD,
+                targetGeneralIndex: selfIdx,
+                context: {
+                    skillId: 'wenyang_quedi_discard',
+                    skillName: '却敌',
+                    description: '弃置一张基本牌，令此牌造成的伤害+1',
+                    count: 1,
+                    mode: 'discard',
+                    candidateCardIds: basics,
+                    quediCardId: cardId,
+                    quediBoth: action === 'both',
+                },
+            })
+            return
+        }
         // ── 节命（界荀彧）：选择一项后指定一名角色
         case 'xunyu_jieming': {
             state.pendingResponseQueue.shift()
@@ -17570,6 +17701,28 @@ function handleRespondImpl(state: GameState, playerId: string, data: C2S_Respond
             const expP = expPickA(state, targetGeneral, pending, action, ctx, ids)
             if (expP !== EXP_UNHANDLED) return expP
 
+            // 却敌（文鸯）：弃置一张基本牌，令此牌造成的伤害+1
+            if (ctx.skillId === 'wenyang_quedi_discard') {
+                state.pendingResponseQueue.shift()
+                if (action === 'decline') {
+                    addLog(state, `【${getGeneralName(targetGeneral)}】放弃弃置基本牌，【却敌】的伤害加成未生效`)
+                    return
+                }
+                const picked = targetGeneral.hand.find(c => c.id === ids[0]
+                    && c.category === CardCategory.BASIC)
+                if (!picked) return { error: '请选择一张基本牌' }
+                targetGeneral.hand.splice(targetGeneral.hand.indexOf(picked), 1)
+                state.discard.push(picked)
+                targetGeneral.quediBonusCardId = ctx.quediCardId as string
+                addLog(state, `【${getGeneralName(targetGeneral)}】发动【却敌】，弃置${cardFullName(picked)}，令此牌造成的伤害+1`)
+                if (ctx.quediBoth) {
+                    targetGeneral.maxHp = Math.max(1, targetGeneral.maxHp - 1)
+                    if (targetGeneral.hp > targetGeneral.maxHp) targetGeneral.hp = targetGeneral.maxHp
+                    addLog(state, `【${getGeneralName(targetGeneral)}】因【却敌】减1点体力上限（体力上限 ${targetGeneral.maxHp}）`)
+                }
+                return
+            }
+
             // 生息（蒋琬-竞）：弃置目标X张牌，然后其回复1点体力
             if (ctx.skillId === 'jiangwan_jing_shengxi') {
                 state.pendingResponseQueue.shift()
@@ -19695,6 +19848,10 @@ function handleDuelResponse(
         state.pendingResponseQueue.shift()
         const duelDamage = opponent && opponent.luoyiActive ? 2 : 1
         dealDamage(state, opponent || null, targetGeneral, duelDamage, ctx.duelCardId, { fromDuel: true })
+        // 椎锋：决斗结束时清理待.prevent 标记（未受伤时也要清）
+        if (initiator && initiator.zhuifengDuelCardId === ctx.duelCardId) {
+            initiator.zhuifengDuelCardId = undefined
+        }
         triggerWujingDuelResolved(state, ctx.initiatorGeneralIndex, duelTargetIdx)
 
         // 战绝（刘谌）：决斗结算后，使用者与受伤角色各摸一张
@@ -20833,6 +20990,7 @@ function useVirtualDuel(
     source: GeneralInstance,
     targetIndex: number,
     label: string,
+    zhuifeng = false,
 ): { error: string } | void {
     const target = state.generals[targetIndex]
     if (!target?.alive || target === source) return { error: '目标无效' }
@@ -20846,6 +21004,7 @@ function useVirtualDuel(
         virtual: true,
     }
     addLog(state, `【${getGeneralName(source)}】${label ? `【${label}】` : ''}视为对【${getGeneralName(target)}】使用一张【决斗】`)
+    if (zhuifeng) source.zhuifengDuelCardId = duelCard.id
     return handleTrickCard(state, source, duelCard, -1, [target])
 }
 
@@ -21036,6 +21195,10 @@ function gainRandomRedCardFromDeck(state: GameState, general: GeneralInstance): 
 /** 杀的目标逐一结算完成（闪避 / 受伤 / 被抵消）。全部完成后进入结算结束钩子。 */
 function noteSlashTargetResolved(state: GameState, card: Card | undefined): void {
     if (!card) return
+    // 却敌：此【杀】对唯一目标的结算已结束（命中/被闪/被抵消），未用完的加伤标记作废
+    for (const g of state.generals) {
+        if (g.quediBonusCardId === card.id) g.quediBonusCardId = undefined
+    }
     const left = (card as any).__ljPending as number | undefined
     if (left === undefined) return
     const next = left - 1

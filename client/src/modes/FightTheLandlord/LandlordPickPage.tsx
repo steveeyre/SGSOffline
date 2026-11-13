@@ -23,6 +23,7 @@ function oddityTooltip(o: OddityOption) {
 export default function LandlordPickPage() {
     const navigate = useNavigate()
     const gameState = useGameStore((s) => s.gameState)
+    const hotseat = useGameStore((s) => s.hotseat)
     const pick = gameState?.landlordPick
     const humanSide = gameState?.landlordHumanSide ?? 'landlord'
     const phase = gameState?.phase
@@ -55,7 +56,8 @@ export default function LandlordPickPage() {
         )
     }
 
-    const isHumanSeat = (seat: number) => (seat === 0 ? humanSide === 'landlord' : humanSide === 'farmers')
+    const isHumanSeat = (seat: number) => hotseat
+        || (seat === 0 ? humanSide === 'landlord' : humanSide === 'farmers')
     const allPicked = pick.picked.every((id) => id !== null)
     const oddities = pick.oddities
     const oddityPicked = pick.oddityPicked

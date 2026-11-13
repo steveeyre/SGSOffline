@@ -24,7 +24,12 @@ function measureSplit(): number | null {
 }
 
 /** 左右手对弈的双屏容器：暖方在上、冷方在下（或宽屏时左、右） */
-export default function HotseatSplit({ warm, cool }: { warm: ReactNode; cool: ReactNode }) {
+export default function HotseatSplit({ warm, cool, warmLabel = '暖方', coolLabel = '冷方' }: {
+    warm: ReactNode
+    cool: ReactNode
+    warmLabel?: string
+    coolLabel?: string
+}) {
     const [firstPaneSize, setFirstPaneSize] = useState<number | null>(() => measureSplit())
 
     useEffect(() => {
@@ -36,11 +41,11 @@ export default function HotseatSplit({ warm, cool }: { warm: ReactNode; cool: Re
     return (
         <div className="hotseat-split">
             <div className="hotseat-pane" style={firstPaneSize ? { flex: `0 0 ${firstPaneSize}px` } : undefined}>
-                <div className="hotseat-pane-label warm">暖方<span className="hotseat-pane-side" /></div>
+                <div className="hotseat-pane-label warm">{warmLabel}<span className="hotseat-pane-side" /></div>
                 {warm}
             </div>
             <div className="hotseat-pane">
-                <div className="hotseat-pane-label cool">冷方<span className="hotseat-pane-side" /></div>
+                <div className="hotseat-pane-label cool">{coolLabel}<span className="hotseat-pane-side" /></div>
                 {cool}
             </div>
         </div>

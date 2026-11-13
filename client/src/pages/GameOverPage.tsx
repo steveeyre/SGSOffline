@@ -72,7 +72,7 @@ export default function GameOverPage() {
                         : `${winnerFaction === Faction.WARM ? '暖色方' : '冷色方'}获得胜利`}
             </div>
             <div className="gameover-side">
-                你执{mySideLabel()}{hotseat ? '（本地对战）' : ''}
+                {hotseat ? '本地对战' : `你执${mySideLabel()}`}
             </div>
 
             {myStats && foeStats && (

@@ -16,7 +16,9 @@ import {
     maybeZongxuan,
 } from './game-actions'
 import { beginMatchLog } from './match-log'
-import { createLocalMatch, localDeployGenerals, HUMAN_PLAYER_ID, AI_PLAYER_ID } from './local-match'
+import { createLocalMatch, localDeployGenerals, HUMAN_PLAYER_ID, HUMAN2_PLAYER_ID, AI_PLAYER_ID } from './local-match'
+import { createPairMatch, pairPickGeneral } from '../modes/HappyPair/pair-match'
+import { createLandlordMatch, landlordPickGeneral } from '../modes/FightTheLandlord/landlord-match'
 import { skillUseBlocked } from './skill-limit'
 import {
     finishJudgePhaseAndContinue, handleEndTurn, finishTurn, chooseActionUnit, handleYieldChoice, handleDiscard,
@@ -4653,6 +4655,149 @@ console.log('[神甘宁开局体力]')
     localDeployGenerals(s, Faction.COOL, 'guojia', 'zhenji', 'xiahoudun')
     const gan = s.generals.find((g) => g.generalId === 'ganning_shen')!
     check('神甘宁开局 3/6（6 上限失去 3 点体力）', gan.hp === 3 && gan.maxHp === 6, `${gan.hp}/${gan.maxHp}`)
+}
+
+console.log('[文鸯]')
+{
+    // 却敌：获得目标一张手牌
+    const s = build(['wenyang', 'huatuo', 'sunquan'], ['caocao', 'guojia', 'zhenji'], 81)
+    const wy = s.generals[3]
+    const cc = s.generals[2]
+    s.turnSerial = 1
+    wy.hand = [
+        card('wd1', BasicCardName.ATTACK, CardSuit.SPADE, 10),
+        card('wd2', BasicCardName.DODGE, CardSuit.HEART, 2),
+    ]
+    cc.hand = [
+        card('wc1', BasicCardName.DODGE, CardSuit.HEART, 3),
+        card('wc2', BasicCardName.PEACH, CardSuit.DIAMOND, 4),
+    ]
+    handleUseCard(s, HUMAN_PLAYER_ID, { cardId: 'wd1', targetIndices: [2] } as any)
+    check('却敌：使用【杀】后询问', !!findPending(s, 'wenyang_quedi'), queue(s))
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'gain' } as any)
+    check('却敌：获得目标一张手牌', wy.hand.some(c => c.id === 'wc1' || c.id === 'wc2'),
+        wy.hand.map(c => c.id))
+    check('却敌：本回合次数已用', wy.quediCount === 1, wy.quediCount)
+}
+{
+    // 却敌：弃基本牌令伤害+1
+    const s = build(['wenyang', 'huatuo', 'sunquan'], ['caocao', 'guojia', 'zhenji'], 82)
+    const wy = s.generals[3]
+    const cc = s.generals[2]
+    s.turnSerial = 1
+    wy.hand = [
+        card('we1', BasicCardName.ATTACK, CardSuit.SPADE, 10),
+        card('we2', BasicCardName.DODGE, CardSuit.HEART, 2),
+    ]
+    cc.hand = []
+    handleUseCard(s, HUMAN_PLAYER_ID, { cardId: 'we1', targetIndices: [2] } as any)
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'bonus' } as any)
+    const pick = findPending(s, 'wenyang_quedi_discard')
+    check('却敌：进入弃基本牌选择', !!pick && pick.type === ResponseType.SKILL_PICK_CARD, queue(s))
+    handleRespond(s, HUMAN_PLAYER_ID, { cardIds: ['we2'] } as any)
+    check('却敌：已挂上伤害加成', wy.quediBonusCardId === 'we1', wy.quediBonusCardId)
+    handleRespond(s, AI_PLAYER_ID, {} as any)
+    check('却敌：此【杀】伤害+1', cc.hp === cc.maxHp - 2, `${cc.hp}/${cc.maxHp}`)
+    check('却敌：伤害加成用完即清', wy.quediBonusCardId === undefined, wy.quediBonusCardId)
+}
+{
+    // 却敌：两项都选，减1点体力上限
+    const s = build(['wenyang', 'huatuo', 'sunquan'], ['caocao', 'guojia', 'zhenji'], 83)
+    const wy = s.generals[3]
+    const cc = s.generals[2]
+    s.turnSerial = 1
+    const maxHpBefore = wy.maxHp
+    wy.hand = [
+        card('wf1', BasicCardName.ATTACK, CardSuit.SPADE, 10),
+        card('wf2', BasicCardName.DODGE, CardSuit.HEART, 2),
+    ]
+    cc.hand = [card('wc3', BasicCardName.PEACH, CardSuit.DIAMOND, 4)]
+    handleUseCard(s, HUMAN_PLAYER_ID, { cardId: 'wf1', targetIndices: [2] } as any)
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'both' } as any)
+    handleRespond(s, HUMAN_PLAYER_ID, { cardIds: ['wf2'] } as any)
+    check('却敌：两项都选后减1点体力上限', wy.maxHp === maxHpBefore - 1, wy.maxHp)
+    check('却敌：两项都选也获得手牌', wy.hand.some(c => c.id === 'wc3'), wy.hand.map(c => c.id))
+}
+{
+    // 仇决：杀死角色后加体力上限、摸两张、却敌上限+1
+    const s = build(['wenyang', 'huatuo', 'sunquan'], ['caocao', 'guojia', 'zhenji'], 84)
+    const wy = s.generals[3]
+    const cc = s.generals[0]
+    cc.seatRole = SeatRole.COMMANDER
+    s.turnSerial = 5
+    cc.hp = 1
+    wy.maxHp = 4
+    wy.quediTurn = 5
+    wy.quediCount = 0
+    wy.quediExtra = 0
+    const handBefore = wy.hand.length
+    s.deck = Array.from({ length: 10 }, (_, i) =>
+        card('qd' + i, BasicCardName.PEACH, CardSuit.HEART, (i % 9) + 1))
+    dealDamage(s, wy, cc, 1)
+    for (let i = 0; i < 12 && s.pendingResponseQueue.length > 0; i++) {
+        const head = s.pendingResponseQueue[0]
+        handleRespond(s, s.generals[head.targetGeneralIndex].playerId, { action: 'skip_all' } as any)
+    }
+    check('仇决：目标阵亡', !cc.alive)
+    check('仇决：加1点体力上限', wy.maxHp === 5, wy.maxHp)
+    check('仇决：摸两张牌', wy.hand.length === handBefore + 2, wy.hand.length)
+    check('仇决：本回合却敌次数上限+1', (wy.quediExtra ?? 0) === 1, wy.quediExtra)
+}
+{
+    // 椎锋：失去1点体力视为使用【决斗】；因掉血时防止并失效
+    const s = build(['wenyang', 'huatuo', 'sunquan'], ['zhangfei', 'guojia', 'zhenji'], 85)
+    const wy = s.generals[3]
+    const zf = s.generals[2]
+    s.turnSerial = 1
+    wy.hp = 4
+    wy.hand = []
+    zf.hand = [card('zf1', BasicCardName.ATTACK, CardSuit.SPADE, 8)]
+    handleUseSkill(s, HUMAN_PLAYER_ID, { skillId: 'wenyang_zhuifeng', targetIndices: [2] } as any)
+    check('椎锋：失去1点体力', wy.hp === 3, wy.hp)
+    check('椎锋：视为使用【决斗】（无懈窗口）', !!s.negateWindow, queue(s))
+    negateWindowTimeout(s)
+    check('椎锋：决斗进入响应', s.pendingResponseQueue.some(p => p.type === ResponseType.ATTACK_DUEL),
+        queue(s))
+    handleRespond(s, HUMAN_PLAYER_ID, { action: 'decline' } as any)
+    handleRespond(s, AI_PLAYER_ID, { cardId: 'zf1' } as any)
+    handleRespond(s, HUMAN_PLAYER_ID, {} as any)
+    check('椎锋：防止决斗反伤', wy.hp === 3, wy.hp)
+    check('椎锋：本阶段失效', wy.zhuifengDisabledTurn === 1, wy.zhuifengDisabledTurn)
+    const again = handleUseSkill(s, HUMAN_PLAYER_ID, { skillId: 'wenyang_zhuifeng', targetIndices: [2] } as any)
+    check('椎锋：失效后再用被拒', !!again && 'error' in again, again)
+}
+
+console.log('[本地对战：欢乐成双 / 斗地主]')
+{
+    const s = createPairMatch(Faction.WARM, 901, false, false, undefined, undefined, true)
+    check('欢乐成双本地对战：双方都是本地玩家',
+        !!s.players[HUMAN_PLAYER_ID] && !!s.players[HUMAN2_PLAYER_ID], Object.keys(s.players))
+    check('欢乐成双本地对战：冷方为本地玩家', s.coolPlayerId === HUMAN2_PLAYER_ID, s.coolPlayerId)
+    check('欢乐成双本地对战：不自动补齐 AI 选将',
+        !!s.pairPick?.picked.every((id) => id === null), s.pairPick?.picked)
+    for (const seat of [0, 1, 2, 3]) {
+        const result = pairPickGeneral(s, seat, s.pairPick!.pools[seat][0].id)
+        check(`欢乐成双本地对战：${seat + 1} 号位可选`, !(result && 'error' in result), result)
+    }
+    check('欢乐成双本地对战：四方选完即开局', s.phase === GamePhase.PLAYING, s.phase)
+    check('欢乐成双本地对战：席位归属两名本地玩家',
+        s.generals.filter(g => g.faction === Faction.WARM).every(g => g.playerId === HUMAN_PLAYER_ID)
+        && s.generals.filter(g => g.faction === Faction.COOL).every(g => g.playerId === HUMAN2_PLAYER_ID))
+}
+{
+    const s = createLandlordMatch('landlord', 902, false, false, undefined, undefined, true)
+    check('斗地主本地对战：地主与农民都是本地玩家',
+        !!s.players[HUMAN_PLAYER_ID] && !!s.players[HUMAN2_PLAYER_ID], Object.keys(s.players))
+    check('斗地主本地对战：农民为本地玩家', s.coolPlayerId === HUMAN2_PLAYER_ID, s.coolPlayerId)
+    for (const seat of [0, 1, 2]) {
+        const result = landlordPickGeneral(s, seat, s.landlordPick!.pools[seat][0].id)
+        check(`斗地主本地对战：${seat === 0 ? '地主' : `农民${seat}`} 可选`,
+            !(result && 'error' in result), result)
+    }
+    check('斗地主本地对战：三方选完即开局', s.phase === GamePhase.PLAYING, s.phase)
+    check('斗地主本地对战：地主/农民归属两名本地玩家',
+        s.generals[0]?.playerId === HUMAN_PLAYER_ID
+        && s.generals.slice(1).every(g => g.playerId === HUMAN2_PLAYER_ID))
 }
 
 if (failures > 0) {

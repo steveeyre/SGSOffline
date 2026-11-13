@@ -369,6 +369,10 @@ function ACTIVE_SKILLS_FOR(generalId: string): SkillDef[] {
             id: 'wuxian_zu_yirong', name: '移荣',
             desc: '限两次：摸至/弃至手牌上限，然后手牌上限-1/+1',
         }],
+        wenyang: [{
+            id: 'wenyang_zhuifeng', name: '椎锋',
+            desc: '限两次：失去1点体力，视为使用一张【决斗】（选1名其他角色）；若因此受到伤害，防止此伤害且本阶段此技能失效',
+        }],
     }
     return map[generalId] ?? []
 }
@@ -2298,9 +2302,13 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     const usedIds = skill.usedWith ? [skill.id, ...skill.usedWith] : [skill.id]
                                     const useCount = activeGeneral.skillsUsedThisTurn?.filter(id => usedIds.includes(id)).length ?? 0
                                     const maxUses = skill.id === 'dianwei_jie_qiangxi' ? 2
+                                        : skill.id === 'wenyang_zhuifeng' ? 2
                                         : skill.id === 'zhuran_danshou' ? 4
                                             : skill.id === 'zhonghui_paiyi' ? 2
                                                 : (skill.id === 'cenhun_jishe' || skill.id === 'xiahoushi_yanyu') ? 99 : 1
+                                    const zfDisabled = skill.id === 'wenyang_zhuifeng'
+                                        && (activeGeneral as any).zhuifengDisabledTurn !== undefined
+                                        && (activeGeneral as any).zhuifengDisabledTurn === gameState.turnSerial
                                     const usedThisTurn = skill.id === 'zhonghui_paiyi'
                                         ? (activeGeneral.paiyiUsesPhase ?? 0) >= (activeGeneral.paiyiLimitPhase ?? 1)
                                         : useCount >= maxUses
@@ -2310,7 +2318,7 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                     const usedThisRound = skill.roundField !== undefined
                                         && activeGeneral[skill.roundField] !== undefined
                                         && activeGeneral[skill.roundField] === gameState.roundState?.roundNumber
-                                    const isDisabled = !!(usedThisTurn || usedLimited || levelLocked || usedThisRound)
+                                    const isDisabled = !!(usedThisTurn || usedLimited || levelLocked || usedThisRound || zfDisabled)
                                     return (
                                         <button
                                             key={skill.id}
@@ -2322,12 +2330,13 @@ export default function GamePage({ view, faction }: GamePageProps = {}) {
                                             }}
                                             title={isDisabled
                                                 ? (usedLimited ? '限定技已使用'
+                                                    : zfDisabled ? '本阶段【椎锋】已失效'
                                                     : levelLocked ? `需“矫诏”修改至第${skill.jzLevel}层`
                                                         : usedThisRound ? '本大回合已使用'
                                                             : '本回合已使用')
                                                 : skill.desc}
                                         >
-                                            {skill.name}{usedThisTurn || usedThisRound ? '·已用' : (useCount > 0 ? `·${useCount}/${maxUses}` : '')}
+                                            {skill.name}{zfDisabled ? '·失效' : (usedThisTurn || usedThisRound ? '·已用' : (useCount > 0 ? `·${useCount}/${maxUses}` : ''))}
                                         </button>
                                     )
                                 })}

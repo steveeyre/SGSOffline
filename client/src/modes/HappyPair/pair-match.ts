@@ -14,7 +14,7 @@ import { drawCards } from '../../engine/deck'
 import { addLog, createGeneralInstance, hasSkillOnGeneral } from '../../engine/game-state'
 import { triggerShuzhiChoose } from '../../engine/game-actions'
 import { getGeneralById } from '../../engine/generals'
-import { AI_PLAYER_ID, HUMAN_PLAYER_ID } from '../../engine/local-match'
+import { AI_PLAYER_ID, HUMAN_PLAYER_ID, HUMAN2_PLAYER_ID, isHotseatState } from '../../engine/local-match'
 import { newRandomSeed, setRandomSeed } from '../../engine/rng'
 import { runTurnStart } from '../../engine/turn-manager'
 import { resetSkillUses } from '../../engine/skill-limit'
@@ -54,16 +54,22 @@ export function createPairMatch(
     oddityMode = false,
     skillLimitRule?: SkillLimitRule,
     weaponEnhance?: boolean,
+    hotseat = false,
 ): GameState {
     setRandomSeed(seed)
-    const aiFaction = humanFaction === Faction.WARM ? Faction.COOL : Faction.WARM
-    const human: Player = { id: HUMAN_PLAYER_ID, nickname: '我', faction: humanFaction, connected: true }
-    const ai: Player = { id: AI_PLAYER_ID, nickname: 'AI', faction: aiFaction, connected: true }
+    const humanSide = hotseat ? Faction.WARM : humanFaction
+    const aiFaction = humanSide === Faction.WARM ? Faction.COOL : Faction.WARM
+    const human: Player = hotseat
+        ? { id: HUMAN_PLAYER_ID, nickname: '暖方', faction: Faction.WARM, connected: true }
+        : { id: HUMAN_PLAYER_ID, nickname: '我', faction: humanFaction, connected: true }
+    const opponent: Player = hotseat
+        ? { id: HUMAN2_PLAYER_ID, nickname: '冷方', faction: Faction.COOL, connected: true }
+        : { id: AI_PLAYER_ID, nickname: 'AI', faction: aiFaction, connected: true }
     const pools = buildPairPools()
     const pairPick: PairPickState = { pools, picked: [null, null, null, null] }
     if (oddityMode) {
         // 玩家先选、电脑后选：人类席位的候选此刻抽好，AI 席位等玩家选完后由 aiPairDraft 现场抽取
-        const humanSeats = new Set(pairSeatsOf(humanFaction))
+        const humanSeats = new Set(hotseat ? [0, 1, 2, 3] : pairSeatsOf(humanFaction))
         const used: string[] = []
         pairPick.oddities = pools.map((pool, i) => {
             if (!autoDraft && !humanSeats.has(i)) return []
@@ -82,10 +88,10 @@ export function createPairMatch(
         oddityMode: oddityMode || undefined,
         skillLimitRule,
         weaponEnhance,
-        pairHumanSide: humanFaction,
-        players: { [human.id]: human, [ai.id]: ai },
-        warmPlayerId: humanFaction === Faction.WARM ? HUMAN_PLAYER_ID : AI_PLAYER_ID,
-        coolPlayerId: humanFaction === Faction.COOL ? HUMAN_PLAYER_ID : AI_PLAYER_ID,
+        pairHumanSide: humanSide,
+        players: { [human.id]: human, [opponent.id]: opponent },
+        warmPlayerId: humanSide === Faction.WARM ? HUMAN_PLAYER_ID : AI_PLAYER_ID,
+        coolPlayerId: humanSide === Faction.COOL ? HUMAN_PLAYER_ID : (hotseat ? HUMAN2_PLAYER_ID : AI_PLAYER_ID),
         pairPick,
         generals: [],
         deck: [],
@@ -102,7 +108,7 @@ export function createPairMatch(
     addLog(state, '欢乐成双：1 号位冷色、2/3 号位暖色、4 号位冷色，四方同时选将')
     if (oddityMode) addLog(state, '奇技模式：每名角色另有 3 个奇技候选，选定武将时一并选择')
     // autoDraft=false 时把 AI 席位的选将留给调用方（自对弈/校测构造固定阵容用）
-    if (autoDraft) aiPairDraft(state, () => setupPairPlay(state))
+    if (autoDraft && !hotseat) aiPairDraft(state, () => setupPairPlay(state))
     return state
 }
 
@@ -147,7 +153,7 @@ function commitPairPick(
     if (seat < 0 || seat > 3) return { error: '无效的选将席位' }
     const humanSide = state.pairHumanSide
     if (!humanSide) return { error: '当前不是欢乐成双对局' }
-    if (!pairSeatsOf(humanSide).includes(seat)) return { error: '该席位由 AI 选择' }
+    if (!isHotseatState(state) && !pairSeatsOf(humanSide).includes(seat)) return { error: '该席位由 AI 选择' }
     if (pick.picked[seat]) return { error: '该席位已选好武将' }
     if (fromPointPick) {
         if (!getPairPointPickPool().some((g) => g.id === generalId)) return { error: '武将不在点将池中' }

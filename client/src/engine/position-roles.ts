@@ -188,6 +188,7 @@ export const POSITION_ROLE_BY_ID: Record<string, PositionRole> = {
     zhaoyun_sp: 'blade',
     machao_sp: 'blade',
     jiangwei_mou: 'blade',
+    wenyang: 'blade',
     wujing: 'blade',
 
     // 直伤（28）

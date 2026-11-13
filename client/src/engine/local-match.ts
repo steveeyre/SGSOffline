@@ -79,6 +79,11 @@ export function pickSequenceFor(state: { pickState?: { yieldedPick?: boolean } }
     return PICK_SEQUENCE.map((f) => (f === Faction.WARM ? Faction.COOL : Faction.WARM))
 }
 
+/** 本地对战：冷方也是本地玩家（冷方 id 为 HUMAN2_PLAYER_ID） */
+export function isHotseatState(state: GameState): boolean {
+    return !!state.players[HUMAN2_PLAYER_ID]
+}
+
 /** 暖色方选择先选/让先（选将开始前） */
 export function handlePickYield(
     state: GameState,
